@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Deep Link - Wox Tripflox</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .button {
+            display: inline-block;
+            padding: 15px 30px;
+            margin: 10px;
+            background-color: #9C27B0;
+            color: white;
+            text-decoration: none;
+            border-radius: 25px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .button:hover {
+            background-color: #7B1FA2;
+        }
+        .info {
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧳 Wox Tripflox - Deep Link Test</h1>
+        
+        <div class="info">
+            <h3>Test Deep Links</h3>
+            <p>Click the buttons below to test different deep link formats:</p>
+        </div>
+        
+        <a href="woxtripflox://share/test123" class="button">
+            📱 App Link (woxtripflox://)
+        </a>
+        
+        <a href="https://woxtripflox.app/share/test123" class="button">
+            🌐 Web Link (https://)
+        </a>
+        
+        <div class="info">
+            <h3>Instructions</h3>
+            <ul>
+                <li><strong>App Link:</strong> Should open the Wox Tripflox app directly (if installed)</li>
+                <li><strong>Web Link:</strong> Should show the web fallback page</li>
+                <li>Make sure the app is running in Expo Go or installed on your device</li>
+            </ul>
+        </div>
+        
+        <div class="info">
+            <h3>Expected Behavior</h3>
+            <ul>
+                <li>If app is installed: Opens the app with the shared trip</li>
+                <li>If app is not installed: Shows download instructions</li>
+                <li>If link is invalid: Shows error message</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
