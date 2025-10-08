@@ -1,9 +1,10 @@
 import { ThemedText } from '@/components/themed-text';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { deleteJournalEntry, deleteJournalMedia, getJournalEntryById, getJournalMedia, getTripSteps, JournalEntryRow, JournalMediaRow, TripStepRow } from '@/contexts/db';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
+import { useTranslation } from '@/hooks/use-translation';
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useState } from 'react';
@@ -13,13 +14,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const { width } = Dimensions.get('window');
 
 export default function JournalEntryDetailScreen() {
+  const { t } = useTranslation();
   const { id, entryId } = useLocalSearchParams<{ id: string; entryId: string }>();
   const [entry, setEntry] = useState<JournalEntryRow | null>(null);
   const [media, setMedia] = useState<JournalMediaRow[]>([]);
   const [steps, setSteps] = useState<TripStepRow[]>([]);
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const text = useThemeColor({}, 'text');
+  const text = theme.text;
   const insets = useSafeAreaInsets();
 
   const loadData = useCallback(async () => {
@@ -70,19 +72,19 @@ export default function JournalEntryDetailScreen() {
 
   const handleDeleteEntry = () => {
     Alert.alert(
-      'Delete Entry',
-      'Are you sure you want to delete this journal entry? This action cannot be undone.',
+      t('journalEntry.deleteEntry'),
+      t('journalEntry.deleteEntryConfirm'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         { 
-          text: 'Delete', 
+          text: t('common.delete'), 
           style: 'destructive', 
           onPress: async () => {
             try {
               await deleteJournalEntry(Number(entryId));
               router.back();
             } catch (error) {
-              Alert.alert('Error', 'Failed to delete journal entry');
+              Alert.alert(t('journalEntry.error'), t('journalEntry.failedToDeleteEntry'));
             }
           }
         }
@@ -92,19 +94,19 @@ export default function JournalEntryDetailScreen() {
 
   const handleDeleteMedia = (mediaId: number, mediaType: string) => {
     Alert.alert(
-      'Delete Media',
-      `Are you sure you want to delete this ${mediaType}?`,
+      t('journalEntry.deleteMedia'),
+      t('journalEntry.deleteMediaConfirm', { type: mediaType }),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         { 
-          text: 'Delete', 
+          text: t('common.delete'), 
           style: 'destructive', 
           onPress: async () => {
             try {
               await deleteJournalMedia(mediaId);
               loadData();
             } catch (error) {
-              Alert.alert('Error', 'Failed to delete media');
+              Alert.alert(t('journalEntry.error'), t('journalEntry.failedToDeleteMedia'));
             }
           }
         }
@@ -122,7 +124,7 @@ export default function JournalEntryDetailScreen() {
         style={styles.deleteMediaButton}
         onPress={() => handleDeleteMedia(item.id, 'photo')}
       >
-        <ThemedText style={styles.deleteMediaText}>×</ThemedText>
+        <ThemedText style={[styles.deleteMediaText, { color: theme.text }]}>×</ThemedText>
       </TouchableOpacity>
     </View>
   );
@@ -130,7 +132,7 @@ export default function JournalEntryDetailScreen() {
   if (!entry) {
     return (
       <ThemedView style={styles.container}>
-        <ThemedText>Loading...</ThemedText>
+        <ThemedTextI18n i18nKey="journalEntry.loading" />
       </ThemedView>
     );
   }
@@ -143,7 +145,10 @@ export default function JournalEntryDetailScreen() {
       <View style={styles.audioInfo}>
         <ThemedText style={styles.audioIcon}>🎵</ThemedText>
         <View style={styles.audioDetails}>
-          <ThemedText style={[styles.audioTitle, { color: text }]}>Audio Recording</ThemedText>
+          <ThemedTextI18n 
+            i18nKey="journalEntry.audioRecording" 
+            style={[styles.audioTitle, { color: text }]}
+          />
           {item.caption ? (
             <ThemedText style={[styles.audioCaption, { color: text }]}>{item.caption}</ThemedText>
           ) : null}
@@ -153,7 +158,7 @@ export default function JournalEntryDetailScreen() {
         style={styles.deleteMediaButton}
         onPress={() => handleDeleteMedia(item.id, 'audio')}
       >
-        <ThemedText style={styles.deleteMediaText}>×</ThemedText>
+        <ThemedText style={[styles.deleteMediaText, { color: theme.text }]}>×</ThemedText>
       </TouchableOpacity>
     </View>
   );
@@ -162,10 +167,9 @@ export default function JournalEntryDetailScreen() {
     <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ThemedText type="link">← Back</ThemedText>
+          <ThemedTextI18n i18nKey="journalEntry.back" type="link" />
         </TouchableOpacity>
         
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.titleContainer}>
             <ThemedText type="title" style={[styles.title, { color: text }]}>
@@ -180,7 +184,6 @@ export default function JournalEntryDetailScreen() {
           </TouchableOpacity>
         </View>
         
-        {/* Date and Time */}
         <View style={styles.dateContainer}>
           <ThemedText style={[styles.date, { color: text }]}>
             {formatDate(entry.entryDate)}
@@ -190,7 +193,6 @@ export default function JournalEntryDetailScreen() {
           </ThemedText>
         </View>
         
-        {/* Content */}
         {entry.content ? (
           <View style={styles.contentContainer}>
             <ThemedText style={[styles.content, { color: text }]}>
@@ -199,12 +201,14 @@ export default function JournalEntryDetailScreen() {
           </View>
         ) : null}
         
-        {/* Photos */}
         {photos.length > 0 ? (
           <View style={styles.mediaSection}>
-            <ThemedText type="subtitle" style={[styles.mediaSectionTitle, { color: text }]}>
-              Photos ({photos.length})
-            </ThemedText>
+            <ThemedTextI18n 
+              i18nKey="journalEntry.photos" 
+              i18nOptions={{ count: photos.length }}
+              type="subtitle" 
+              style={[styles.mediaSectionTitle, { color: text }]}
+            />
             <FlatList
               data={photos}
               keyExtractor={(item) => String(item.id)}
@@ -217,25 +221,27 @@ export default function JournalEntryDetailScreen() {
           </View>
         ) : null}
         
-        {/* Audios */}
         {audios.length > 0 ? (
           <View style={styles.mediaSection}>
-            <ThemedText type="subtitle" style={[styles.mediaSectionTitle, { color: text }]}>
-              Audio Notes ({audios.length})
-            </ThemedText>
+            <ThemedTextI18n 
+              i18nKey="journalEntry.audioNotes" 
+              i18nOptions={{ count: audios.length }}
+              type="subtitle" 
+              style={[styles.mediaSectionTitle, { color: text }]}
+            />
             <View style={styles.audioList}>
               {audios.map((audio) => renderAudio({ item: audio }))}
             </View>
           </View>
         ) : null}
         
-        {/* Empty State for Media */}
         {media.length === 0 ? (
           <View style={styles.emptyMediaState}>
             <ThemedText style={styles.emptyMediaIcon}>📷</ThemedText>
-            <ThemedText style={[styles.emptyMediaText, { color: text }]}>
-              No photos or audio recordings
-            </ThemedText>
+            <ThemedTextI18n 
+              i18nKey="journalEntry.noMedia" 
+              style={[styles.emptyMediaText, { color: text }]}
+            />
           </View>
         ) : null}
       </ScrollView>
@@ -340,7 +346,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   deleteMediaText: {
-    color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
   },

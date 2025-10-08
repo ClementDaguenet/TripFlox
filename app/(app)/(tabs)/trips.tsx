@@ -1,461 +1,505 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
+import { AnimatedWaves } from '@/components/ui/animated-waves';
+import { GlassCard } from '@/components/ui/glass-card';
+import { GradientBackground } from '@/components/ui/gradient-background';
+import { GradientButton } from '@/components/ui/gradient-button';
+import { GradientCard } from '@/components/ui/gradient-card';
 import { Colors } from '@/constants/theme';
-import { deleteTripById, getAllTrips, TripRow } from '@/contexts/db';
+import { useAuth } from '@/contexts/AuthContext';
+import { deleteTripById, getAllTrips, getUserProfile, TripRow } from '@/contexts/db';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
+import { useTranslation } from '@/hooks/use-translation';
+import { getLocationDisplay, getLocationDisplaySync } from '@/services/location-utils';
 import { useFocusEffect } from '@react-navigation/native';
 import { Link } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Alert, FlatList, Image, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import {
+    Alert,
+    Dimensions,
+    FlatList,
+    Image,
+    StyleSheet,
+    TextInput,
+    TouchableOpacity,
+    View
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+const { width } = Dimensions.get('window');
+
 export default function TripsScreen() {
+  const { t } = useTranslation();
   const [trips, setTrips] = useState<TripRow[]>([]);
   const [query, setQuery] = useState('');
+  const [userId, setUserId] = useState<number | null>(null);
+  const [locationNames, setLocationNames] = useState<Map<string, string>>(new Map());
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const border = useThemeColor({}, 'icon');
-  const text = useThemeColor({}, 'text');
   const insets = useSafeAreaInsets();
+  const { currentUserEmail } = useAuth();
 
   const load = async () => {
-    const all = await getAllTrips();
-    setTrips(all);
+    if (userId) {
+      const all = await getAllTrips(userId);
+      setTrips(all);
+      
+      // Charger les noms de lieux de manière asynchrone
+      loadLocationNames(all);
+    }
+  };
+
+  const loadLocationNames = async (trips: TripRow[]) => {
+    const newLocationNames = new Map(locationNames);
+    
+    // Traiter les trips par batch pour éviter de surcharger l'API
+    const batchSize = 3;
+    const tripsWithLocation = trips.filter(trip => trip.lat && trip.lng);
+    
+    for (let i = 0; i < tripsWithLocation.length; i += batchSize) {
+      const batch = tripsWithLocation.slice(i, i + batchSize);
+      
+      const batchPromises = batch.map(async (trip) => {
+        const key = `${trip.lat},${trip.lng}`;
+        if (!newLocationNames.has(key)) {
+          try {
+            const locationName = await getLocationDisplay(trip.lat!, trip.lng!);
+            return { key, locationName };
+          } catch (error) {
+            console.error('Error loading location name:', error);
+            return { key, locationName: getLocationDisplaySync(trip.lat!, trip.lng!) };
+          }
+        }
+        return null;
+      });
+      
+      const results = await Promise.all(batchPromises);
+      results.forEach(result => {
+        if (result) {
+          newLocationNames.set(result.key, result.locationName);
+        }
+      });
+      
+      // Délai entre les batches pour éviter le rate limiting
+      if (i + batchSize < tripsWithLocation.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+    setLocationNames(newLocationNames);
   };
 
   useEffect(() => {
+    const loadUserId = async () => {
+      if (currentUserEmail) {
+        const user = await getUserProfile(currentUserEmail);
+        if (user) {
+          setUserId(user.id);
+        }
+      }
+    };
+    loadUserId();
+  }, [currentUserEmail]);
+
+  useEffect(() => {
     load();
-  }, []);
+  }, [userId]);
 
   useFocusEffect(React.useCallback(() => {
     load();
-  }, []));
+  }, [userId]));
 
   const filtered = trips.filter(t => t.title.toLowerCase().includes(query.toLowerCase()));
 
   const handleDeleteTrip = (tripId: number, tripTitle: string) => {
     Alert.alert(
-      'Delete Trip',
-      `Are you sure you want to delete "${tripTitle}"?`,
+      t('trips.deleteTrip'),
+      t('trips.deleteTripConfirm', { title: tripTitle }),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         { 
-          text: 'Delete', 
+          text: t('common.delete'), 
           style: 'destructive', 
           onPress: async () => {
-            await deleteTripById(tripId);
-            load();
+            if (userId) {
+              await deleteTripById(tripId, userId);
+              load();
+            }
           }
         }
       ]
     );
   };
 
-  const formatDate = (timestamp: number | null) => {
-    if (!timestamp) return 'No date set';
-    return new Date(timestamp).toLocaleDateString('en-US', {
-      month: 'short',
+  const formatDate = (dateValue: number | string) => {
+    const date = new Date(typeof dateValue === 'number' ? dateValue : dateValue);
+    return date.toLocaleDateString('en-US', { 
+      month: 'short', 
       day: 'numeric',
       year: 'numeric'
     });
   };
 
-  const getTripDuration = (startDate: number | null, endDate: number | null) => {
-    if (!startDate || !endDate) return null;
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    const diffTime = Math.abs(end.getTime() - start.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
+  const getTripGradient = (index: number) => {
+    const gradients = ['primary', 'secondary', 'sunset', 'ocean', 'forest', 'fire', 'night', 'aurora'];
+    return gradients[index % gradients.length] as any;
   };
 
-  return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <ThemedText type="title" style={styles.headerTitle}>My Trips</ThemedText>
-          <ThemedText style={styles.headerSubtitle}>{filtered.length} trip{filtered.length !== 1 ? 's' : ''}</ThemedText>
-        </View>
-        <View style={styles.headerButtons}>
-          <Link href="/(app)/trips/offline" asChild>
-            <TouchableOpacity style={[styles.offlineButton, { backgroundColor: '#ff8c00' }]}>
-              <ThemedText style={styles.offlineButtonText}>📱 Offline</ThemedText>
-            </TouchableOpacity>
-          </Link>
-          <Link href="/(app)/trips/new" asChild>
-            <TouchableOpacity style={[styles.newTripButton, { backgroundColor: theme.tint }]}>
-              <ThemedText style={styles.newTripButtonText}>+ New Trip</ThemedText>
-            </TouchableOpacity>
-          </Link>
-        </View>
-      </View>
-
-      {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <TextInput
-          style={[styles.searchInput, { borderColor: border, color: text }]}
-          placeholder="Search your trips..."
-          placeholderTextColor={border}
-          value={query}
-          onChangeText={setQuery}
-        />
-        <View style={[styles.searchIcon, { backgroundColor: theme.tint }]}>
-          <ThemedText style={styles.searchIconText}>🔍</ThemedText>
-        </View>
-      </View>
-
-      {/* Trips List */}
-      <FlatList
-        data={filtered}
-        keyExtractor={item => String(item.id)}
-        contentContainerStyle={styles.listContainer}
-        showsVerticalScrollIndicator={false}
-        renderItem={({ item }) => {
-          const duration = getTripDuration(item.startDate, item.endDate);
-          return (
-            <View style={[styles.tripCard, { borderColor: theme.icon, backgroundColor: theme.background }]}>
-              {/* Trip Image */}
-              <View style={styles.tripImageContainer}>
-                {item.coverUri ? (
-                  <Image source={{ uri: item.coverUri }} style={styles.tripImage} />
-                ) : (
-                  <View style={[styles.tripImagePlaceholder, { backgroundColor: theme.tint }]}>
-                    <ThemedText style={styles.tripImagePlaceholderText}>🗺️</ThemedText>
-                  </View>
-                )}
-                <View style={[styles.tripStatusBadge, { backgroundColor: theme.tint }]}>
-                  <ThemedText style={styles.tripStatusText}>Active</ThemedText>
-                </View>
-              </View>
-
-              {/* Trip Content */}
-              <View style={styles.tripContent}>
-                <ThemedText type="subtitle" style={[styles.tripTitle, { color: theme.text }]}>{item.title}</ThemedText>
-                
-                {/* Trip Dates */}
-                <View style={styles.tripDates}>
-                  <View style={styles.dateItem}>
-                    <ThemedText style={[styles.dateLabel, { color: theme.text }]}>Start</ThemedText>
-                    <ThemedText style={[styles.dateValue, { color: theme.text }]}>{formatDate(item.startDate)}</ThemedText>
-                  </View>
-                  <View style={styles.dateItem}>
-                    <ThemedText style={[styles.dateLabel, { color: theme.text }]}>End</ThemedText>
-                    <ThemedText style={[styles.dateValue, { color: theme.text }]}>{formatDate(item.endDate)}</ThemedText>
-                  </View>
-                  {duration && (
-                    <View style={styles.dateItem}>
-                      <ThemedText style={[styles.dateLabel, { color: theme.text }]}>Duration</ThemedText>
-                      <ThemedText style={[styles.dateValue, { color: theme.text }]}>{duration} day{duration !== 1 ? 's' : ''}</ThemedText>
-                    </View>
-                  )}
-                </View>
-
-                {/* Trip Location */}
-                {item.lat && item.lng && (
-                  <View style={styles.tripLocation}>
-                    <ThemedText style={styles.locationIcon}>📍</ThemedText>
-                    <ThemedText style={[styles.locationText, { color: theme.text }]}>Location set</ThemedText>
-                  </View>
-                )}
-
-                    {/* Action Buttons */}
-                    <View style={styles.tripActions}>
-                      <Link href={{ pathname: '/(app)/trips/[id]', params: { id: String(item.id) } }} asChild>
-                        <TouchableOpacity style={[styles.viewButton, { backgroundColor: theme.tint }]}>
-                          <View style={styles.viewButtonContent}>
-                            <ThemedText style={styles.viewButtonIcon}>👁️</ThemedText>
-                            <ThemedText style={styles.viewButtonText}>View Details</ThemedText>
-                          </View>
-                        </TouchableOpacity>
-                      </Link>
-                      <TouchableOpacity 
-                        style={[styles.deleteButton]} 
-                        onPress={() => handleDeleteTrip(item.id, item.title)}
-                      >
-                        <View style={styles.deleteButtonContent}>
-                          <ThemedText style={styles.deleteButtonIcon}>🗑️</ThemedText>
-                          <ThemedText style={styles.deleteButtonText}>Delete</ThemedText>
-                        </View>
-                      </TouchableOpacity>
-                    </View>
-              </View>
+  const renderTripCard = ({ item, index }: { item: TripRow; index: number }) => (
+    <GradientCard
+      gradient={getTripGradient(index)}
+      style={styles.tripCard}
+      shadow="lg"
+      borderRadius="xl"
+    >
+      <View style={styles.tripCardContent}>
+        {/* Image de couverture ou placeholder */}
+        <View style={styles.tripCoverContainer}>
+          {item.coverUri ? (
+            <>
+              <Image 
+                source={{ uri: item.coverUri }} 
+                style={styles.tripCoverImage}
+                resizeMode="cover"
+              />
+              <View style={styles.tripCoverOverlay} />
+            </>
+          ) : (
+            <View style={[styles.tripCoverPlaceholder, { backgroundColor: theme.backgroundSecondary }]}>
+              <ThemedText style={[styles.tripCoverPlaceholderText, { color: theme.textTertiary }]}>
+                📸
+              </ThemedText>
             </View>
-          );
-        }}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <ThemedText style={styles.emptyStateIcon}>🗺️</ThemedText>
-            <ThemedText type="subtitle" style={styles.emptyStateTitle}>No trips yet</ThemedText>
-            <ThemedText style={styles.emptyStateText}>Start planning your next adventure by creating your first trip!</ThemedText>
-            <Link href="/(app)/trips/new" asChild>
-              <TouchableOpacity style={[styles.emptyStateButton, { backgroundColor: theme.tint }]}>
-                <ThemedText style={styles.emptyStateButtonText}>Create Your First Trip</ThemedText>
-              </TouchableOpacity>
+          )}
+        </View>
+        
+        <View style={[styles.tripContent, { paddingHorizontal: 12, paddingBottom: 12 }]}>
+          <View style={styles.tripHeader}>
+            <ThemedText style={[styles.tripTitle, { color: theme.text }]} numberOfLines={2}>
+              {item.title}
+            </ThemedText>
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={() => handleDeleteTrip(item.id, item.title)}
+            >
+              <ThemedText style={[styles.deleteButtonText, { color: theme.text }]}>🗑️</ThemedText>
+            </TouchableOpacity>
+          </View>
+
+          {item.description ? (
+            <ThemedText style={[styles.tripDescription, { color: theme.textSecondary }]} numberOfLines={2}>
+              {item.description}
+            </ThemedText>
+          ) : null}
+
+          <View style={styles.tripDatesCompact}>
+            {item.startDate && (
+              <ThemedText style={[styles.dateCompact, { color: theme.textSecondary }]}>
+                📅 {formatDate(item.startDate)}
+              </ThemedText>
+            )}
+            {item.endDate && (
+              <ThemedText style={[styles.dateCompact, { color: theme.textSecondary }]}>
+                📅 {formatDate(item.endDate)}
+              </ThemedText>
+            )}
+          </View>
+
+          {(item.lat && item.lng) && (
+            <ThemedText style={[styles.locationCompact, { color: theme.textSecondary }]} numberOfLines={1}>
+              📍 {locationNames.get(`${item.lat},${item.lng}`) || getLocationDisplaySync(item.lat, item.lng)}
+            </ThemedText>
+          )}
+
+          <View style={styles.tripActions}>
+            <Link href={`/(app)/trips/${item.id}`} asChild>
+              <GradientButton
+                title={t('common.view')}
+                gradient="fire"
+                size="sm"
+                style={styles.viewButton}
+              />
             </Link>
           </View>
-        }
-      />
-    </ThemedView>
+        </View>
+      </View>
+    </GradientCard>
+  );
+
+  const renderEmptyState = () => (
+    <GradientCard 
+      gradient="aurora" 
+      style={styles.emptyStateCard}
+      shadow="xl"
+      borderRadius="2xl"
+    >
+      <View style={styles.emptyStateContent}>
+        <ThemedText style={styles.emptyStateIcon}>🗺️</ThemedText>
+        <ThemedTextI18n 
+          i18nKey="trips.noTrips" 
+          style={[styles.emptyStateTitle, { color: theme.text }]}
+        />
+        <ThemedTextI18n 
+          i18nKey="trips.noTripsDescription" 
+          style={[styles.emptyStateSubtitle, { color: theme.textSecondary }]}
+        />
+        <Link href="/(app)/trips/new" asChild>
+          <GradientButton
+            title={t('trips.createFirstTrip')}
+            gradient="fire"
+            size="lg"
+            style={styles.emptyStateButton}
+          />
+        </Link>
+      </View>
+    </GradientCard>
+  );
+
+  return (
+    <GradientBackground gradient="secondary" style={styles.container}>
+      <AnimatedWaves intensity="low" style={{ paddingTop: insets.top }}>
+        <View style={styles.content}>
+          {/* Header avec Glassmorphism */}
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
+              <ThemedTextI18n 
+                i18nKey="trips.title" 
+                type="title" 
+                style={[styles.title, { color: theme.text }]}
+              />
+              <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
+                {t('trips.youHaveTrips', { count: trips.length, plural: trips.length !== 1 ? 's' : '' })}
+              </ThemedText>
+            </View>
+          </GlassCard>
+
+          {/* Search Bar avec Glassmorphism */}
+          <GlassCard style={styles.searchCard} blurIntensity={25}>
+            <View style={styles.searchContainer}>
+              <ThemedText style={styles.searchIcon}>🔍</ThemedText>
+              <TextInput
+                style={[styles.searchInput, { color: theme.text }]}
+                placeholder={t('trips.searchTrips')}
+                placeholderTextColor={theme.textSecondary}
+                value={query}
+                onChangeText={setQuery}
+              />
+            </View>
+          </GlassCard>
+
+          {filtered.length > 0 ? (
+            <FlatList
+              data={filtered}
+              renderItem={renderTripCard}
+              keyExtractor={(item) => item.id.toString()}
+              contentContainerStyle={styles.tripsGrid}
+              showsVerticalScrollIndicator={false}
+              numColumns={2}
+              columnWrapperStyle={styles.row}
+            />
+          ) : (
+            <View style={styles.emptyContainer}>
+              {renderEmptyState()}
+            </View>
+          )}
+
+          <View style={styles.fabContainer}>
+            <Link href="/(app)/trips/new" asChild>
+              <GradientButton
+                title={t('trips.newTrip')}
+                gradient="primary"
+                size="lg"
+                style={styles.fab}
+                borderRadius="full"
+              />
+            </Link>
+          </View>
+        </View>
+      </AnimatedWaves>
+    </GradientBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+  container: {
+    flex: 1,
   },
-  header: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'space-between', 
-    marginBottom: 24,
+  content: {
+    flex: 1,
+    paddingHorizontal: 16,
   },
-  headerButtons: {
-    flexDirection: 'row',
-    gap: 8,
+  
+  headerCard: {
+    marginBottom: 16,
+    marginTop: 8,
   },
-  headerTitle: {
+  header: {
+    alignItems: 'center',
+  },
+  title: {
     fontSize: 28,
     fontWeight: 'bold',
     marginBottom: 4,
   },
-  headerSubtitle: {
+  subtitle: {
     fontSize: 16,
-    opacity: 0.7,
+    opacity: 0.8,
   },
-  offlineButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 25,
-  },
-  offlineButtonText: {
-    color: 'white',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  newTripButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 25,
-  },
-  newTripButtonText: {
-    color: 'white',
-    fontWeight: '600',
-    fontSize: 16,
+  searchCard: {
+    marginBottom: 16,
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
-    position: 'relative',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  searchIcon: {
+    fontSize: 20,
+    marginRight: 12,
   },
   searchInput: {
     flex: 1,
-    borderWidth: 1,
-    borderRadius: 25,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
     fontSize: 16,
-    paddingRight: 50,
+    paddingVertical: 8,
   },
-  searchIcon: {
-    position: 'absolute',
-    right: 8,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
+  tripsGrid: {
+    paddingBottom: 100,
+    paddingHorizontal: 4,
   },
-  searchIconText: {
-    fontSize: 16,
-  },
-  listContainer: {
-    paddingBottom: 24,
+  row: {
+    justifyContent: 'flex-start',
+    marginBottom: 16,
+    gap: 8,
   },
   tripCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    marginBottom: 16,
+    width: (width - 50) / 2,
+    minHeight: 180,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
   },
-  tripImageContainer: {
-    position: 'relative',
-    height: 160,
-  },
-  tripImage: {
-    width: '100%',
-    height: '100%',
-  },
-  tripImagePlaceholder: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  tripImagePlaceholderText: {
-    fontSize: 48,
-  },
-  tripStatusBadge: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  tripStatusText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '600',
+  tripCardContent: {
+    flex: 1,
+    justifyContent: 'space-between',
   },
   tripContent: {
-    padding: 20,
-  },
-  tripTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 16,
-  },
-  tripDates: {
-    flexDirection: 'row',
+    flex: 1,
     justifyContent: 'space-between',
-    marginBottom: 16,
   },
-  dateItem: {
-    flex: 1,
-    alignItems: 'center',
+  tripCoverContainer: {
+    height: 80,
+    position: 'relative',
+    marginBottom: 12,
   },
-  dateLabel: {
-    fontSize: 12,
-    opacity: 0.7,
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    fontWeight: '600',
+  tripCoverImage: {
+    width: '100%',
+    height: '100%',
   },
-  dateValue: {
-    fontSize: 14,
-    fontWeight: '500',
+  tripCoverOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
   },
-  tripLocation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  locationIcon: {
-    fontSize: 16,
-    marginRight: 8,
-  },
-  locationText: {
-    fontSize: 14,
-    opacity: 0.7,
-  },
-      tripActions: {
-        flexDirection: 'row',
-        gap: 12,
-      },
-      viewButton: {
-        flex: 1,
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        borderRadius: 25,
-        shadowColor: '#000',
-        shadowOffset: {
-          width: 0,
-          height: 2,
-        },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 3,
-      },
-      viewButtonContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-      },
-      viewButtonIcon: {
-        fontSize: 16,
-      },
-      viewButtonText: {
-        color: 'white',
-        fontWeight: '600',
-        fontSize: 14,
-      },
-      deleteButton: {
-        flex: 1,
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        borderRadius: 25,
-        backgroundColor: '#ff4444',
-        shadowColor: '#000',
-        shadowOffset: {
-          width: 0,
-          height: 2,
-        },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 3,
-      },
-      deleteButtonContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-      },
-      deleteButtonIcon: {
-        fontSize: 16,
-      },
-      deleteButtonText: {
-        color: 'white',
-        fontWeight: '600',
-        fontSize: 14,
-      },
-  emptyState: {
-    flex: 1,
+  tripCoverPlaceholder: {
+    width: '100%',
+    height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 60,
+    borderRadius: 8,
+  },
+  tripCoverPlaceholderText: {
+    fontSize: 32,
+    opacity: 0.6,
+  },
+  tripHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  tripTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    flex: 1,
+    marginRight: 6,
+  },
+  tripDescription: {
+    fontSize: 11,
+    lineHeight: 15,
+    marginBottom: 6,
+  },
+  deleteButton: {
+    padding: 6,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  deleteButtonText: {
+    fontSize: 12,
+  },
+  tripDatesCompact: {
+    marginBottom: 6,
+  },
+  dateCompact: {
+    fontSize: 11,
+    marginBottom: 2,
+  },
+  locationCompact: {
+    fontSize: 10,
+    marginBottom: 6,
+  },
+  tripActions: {
+    alignItems: 'flex-end',
+  },
+  viewButton: {
+    minWidth: 70,
+  },
+
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  emptyStateCard: {
+    marginHorizontal: 16,
+  },
+  emptyStateContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
   },
   emptyStateIcon: {
     fontSize: 64,
-    marginBottom: 20,
+    marginBottom: 16,
+    lineHeight: 70,
   },
   emptyStateTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 12,
+    marginBottom: 8,
     textAlign: 'center',
   },
-  emptyStateText: {
+  emptyStateSubtitle: {
     fontSize: 16,
-    opacity: 0.7,
     textAlign: 'center',
-    lineHeight: 24,
-    marginBottom: 30,
-    paddingHorizontal: 40,
+    marginBottom: 24,
+    lineHeight: 22,
   },
   emptyStateButton: {
-    paddingHorizontal: 30,
-    paddingVertical: 15,
-    borderRadius: 25,
+    minWidth: 200,
   },
-  emptyStateButtonText: {
-    color: 'white',
-    fontWeight: '600',
-    fontSize: 16,
+  fabContainer: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    zIndex: 1000,
+  },
+  fab: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 8,
   },
 });
-
-

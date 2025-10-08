@@ -1,38 +1,71 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
+import { AnimatedWaves } from '@/components/ui/animated-waves';
+import { GlassCard } from '@/components/ui/glass-card';
+import { GradientBackground } from '@/components/ui/gradient-background';
+import { GradientButton } from '@/components/ui/gradient-button';
+import { GradientCard } from '@/components/ui/gradient-card';
 import { Colors } from '@/constants/theme';
-import { deleteTripStep, getTripById, getTripSteps, reorderTripSteps, TripRow, TripStepRow, updateTripLocation } from '@/contexts/db';
+import { useAuth } from '@/contexts/AuthContext';
+import { createInitialTripStepIfNeeded, deleteTripStep, getTripById, getTripSteps, getUserProfile, reorderTripSteps, TripRow, TripStepRow } from '@/contexts/db';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
+import { useTranslation } from '@/hooks/use-translation';
 import { useFocusEffect } from '@react-navigation/native';
 import { Link, router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Dimensions, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Alert, Dimensions, FlatList, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
 export default function TripDetailScreen() {
+  const { t } = useTranslation();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [trip, setTrip] = useState<TripRow | null>(null);
   const [steps, setSteps] = useState<TripStepRow[]>([]);
   const [selectedStepIndex, setSelectedStepIndex] = useState<number | null>(null);
   const [showRouteView, setShowRouteView] = useState(false);
   const [isReordering, setIsReordering] = useState(false);
+  const [userId, setUserId] = useState<number | null>(null);
   const mapRef = useRef<MapView>(null);
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const border = useThemeColor({}, 'icon');
-  const text = useThemeColor({}, 'text');
+  const insets = useSafeAreaInsets();
+
+  // Vérifier si le voyage est passé
+  const isTripPast = () => {
+    if (!trip?.endDate) return false;
+    const today = new Date();
+    const tripEndDate = new Date(trip.endDate);
+    return tripEndDate < today;
+  };
+  const { currentUserEmail } = useAuth();
+
+  useEffect(() => {
+    const loadUserId = async () => {
+      if (currentUserEmail) {
+        const user = await getUserProfile(currentUserEmail);
+        if (user) {
+          setUserId(user.id);
+        }
+      }
+    };
+    loadUserId();
+  }, [currentUserEmail]);
 
   const loadTrip = async () => {
-    if (!id) return;
-    const row = await getTripById(Number(id));
+    if (!id || !userId) return;
+    const row = await getTripById(Number(id), userId);
     setTrip(row);
   };
 
   const loadSteps = async () => {
     if (!id) return;
+    
+    // Créer l'étape initiale si nécessaire
+    await createInitialTripStepIfNeeded(Number(id));
+    
     const tripSteps = await getTripSteps(Number(id));
     setSteps(tripSteps);
   };
@@ -43,79 +76,48 @@ export default function TripDetailScreen() {
 
   useEffect(() => {
     loadData();
-  }, [id]);
+  }, [id, userId]);
 
   useFocusEffect(
     React.useCallback(() => {
       loadData();
-    }, [id])
+    }, [userId])
   );
 
-  const onMapPress = async (e: any) => {
-    if (!id) return;
-    const { latitude, longitude } = e.nativeEvent.coordinate;
-    await updateTripLocation(Number(id), latitude, longitude);
-    setTrip(prev => prev ? { ...prev, lat: latitude, lng: longitude } : prev);
-  };
-
-  const handleDeleteStep = (stepId: number, stepName: string) => {
-    Alert.alert(
-      'Delete Step',
-      `Are you sure you want to delete "${stepName}"?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
-          style: 'destructive', 
-          onPress: async () => {
-            await deleteTripStep(stepId);
-            loadSteps();
-          }
-        }
-      ]
-    );
-  };
-
-  const formatDate = (timestamp: number | null) => {
-    if (!timestamp) return 'No date set';
-    return new Date(timestamp).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
+  const focusOnStep = (step: TripStepRow, index: number) => {
+    if (!mapRef.current || !step.lat || !step.lng) return;
+    
+    setSelectedStepIndex(index);
+    mapRef.current.animateToRegion({
+      latitude: step.lat!,
+      longitude: step.lng!,
+      latitudeDelta: 0.01,
+      longitudeDelta: 0.01,
     });
   };
 
-  const focusOnStep = (stepIndex: number) => {
-    const step = steps[stepIndex];
-    if (!step || !step.lat || !step.lng) return;
-
-    setSelectedStepIndex(stepIndex);
-    
-    if (mapRef.current) {
-      mapRef.current.animateToRegion({
-        latitude: step.lat,
-        longitude: step.lng,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      }, 1000);
-    }
-  };
-
   const focusOnAllSteps = () => {
-    const stepsWithLocation = steps.filter(step => step.lat && step.lng);
-    if (stepsWithLocation.length === 0) return;
+    if (!mapRef.current || steps.length === 0) return;
+    
+    const validSteps = steps.filter(step => step.lat && step.lng);
+    if (validSteps.length === 0) return;
 
-    if (mapRef.current) {
-      const coordinates = stepsWithLocation.map(step => ({
-        latitude: step.lat!,
-        longitude: step.lng!,
-      }));
+    const minLat = Math.min(...validSteps.map(step => step.lat!));
+    const maxLat = Math.max(...validSteps.map(step => step.lat!));
+    const minLng = Math.min(...validSteps.map(step => step.lng!));
+    const maxLng = Math.max(...validSteps.map(step => step.lng!));
 
-      mapRef.current.fitToCoordinates(coordinates, {
-        edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-        animated: true,
-      });
-    }
+    const latDelta = (maxLat - minLat) * 1.2;
+    const lngDelta = (maxLng - minLng) * 1.2;
+
+    mapRef.current.animateToRegion({
+      latitude: (minLat + maxLat) / 2,
+      longitude: (minLng + maxLng) / 2,
+      latitudeDelta: Math.max(latDelta, 0.01),
+      longitudeDelta: Math.max(lngDelta, 0.01),
+    });
+    
+    setSelectedStepIndex(null);
   };
 
   const getRouteCoordinates = () => {
@@ -128,429 +130,498 @@ export default function TripDetailScreen() {
   };
 
   const navigateToNextStep = () => {
-    if (selectedStepIndex === null) {
-      if (steps.length > 0) {
-        focusOnStep(0);
-      }
-    } else if (selectedStepIndex < steps.length - 1) {
-      focusOnStep(selectedStepIndex + 1);
+    if (selectedStepIndex === null || selectedStepIndex >= steps.length - 1) return;
+    const nextIndex = selectedStepIndex + 1;
+    const nextStep = steps[nextIndex];
+    if (nextStep) {
+      focusOnStep(nextStep, nextIndex);
     }
   };
 
   const navigateToPreviousStep = () => {
-    if (selectedStepIndex === null) {
-      if (steps.length > 0) {
-        focusOnStep(steps.length - 1);
-      }
-    } else if (selectedStepIndex > 0) {
-      focusOnStep(selectedStepIndex - 1);
+    if (selectedStepIndex === null || selectedStepIndex <= 0) return;
+    const prevIndex = selectedStepIndex - 1;
+    const prevStep = steps[prevIndex];
+    if (prevStep) {
+      focusOnStep(prevStep, prevIndex);
     }
   };
 
-  const handleReorderSteps = async (newOrder: TripStepRow[]) => {
-    if (!id) return;
-    
+  const handleReorderSteps = async (fromIndex: number, toIndex: number) => {
     try {
-      const stepIds = newOrder.map(step => step.id);
+      const newSteps = [...steps];
+      const [movedStep] = newSteps.splice(fromIndex, 1);
+      newSteps.splice(toIndex, 0, movedStep);
+      
+      // Update order_index for all steps
+      const updatedSteps = newSteps.map((step, index) => ({
+        ...step,
+        order_index: index,
+      }));
+      
+      setSteps(updatedSteps);
+      
+      // Pass only the step IDs to reorderTripSteps
+      const stepIds = updatedSteps.map(step => step.id);
       await reorderTripSteps(Number(id), stepIds);
-      setSteps(newOrder);
     } catch (error) {
-      Alert.alert('Error', 'Failed to reorder steps. Please try again.');
+      console.error('Error reordering steps:', error);
+      Alert.alert(t('common.error'), t('tripDetails.failedToReorderSteps'));
     }
   };
 
-  const moveStepUp = (index: number) => {
+  const moveStepUp = async (index: number) => {
     if (index > 0) {
-      const newSteps = [...steps];
-      [newSteps[index - 1], newSteps[index]] = [newSteps[index], newSteps[index - 1]];
-      setSteps(newSteps);
-      handleReorderSteps(newSteps);
+      await handleReorderSteps(index, index - 1);
     }
   };
 
-  const moveStepDown = (index: number) => {
+  const moveStepDown = async (index: number) => {
     if (index < steps.length - 1) {
-      const newSteps = [...steps];
-      [newSteps[index], newSteps[index + 1]] = [newSteps[index + 1], newSteps[index]];
-      setSteps(newSteps);
-      handleReorderSteps(newSteps);
+      await handleReorderSteps(index, index + 1);
     }
   };
 
-  const initialRegion = {
-    latitude: trip?.lat ?? 48.8566, // default Paris
-    longitude: trip?.lng ?? 2.3522,
-    latitudeDelta: 0.5,
-    longitudeDelta: 0.5,
+  const handleDeleteStep = (stepId: number, stepTitle: string) => {
+    Alert.alert(
+      t('tripDetails.deleteStep'),
+      t('tripDetails.deleteStepConfirm', { stepTitle }),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        { 
+          text: t('common.delete'), 
+          style: 'destructive', 
+          onPress: async () => {
+            await deleteTripStep(stepId);
+            loadSteps();
+          }
+        }
+      ]
+    );
   };
+
+  const formatDate = (dateValue: number | string) => {
+    const date = new Date(typeof dateValue === 'number' ? dateValue : dateValue);
+    return date.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      year: 'numeric'
+    });
+  };
+
+  const getStepGradient = (index: number) => {
+    const gradients = ['primary', 'secondary', 'sunset', 'ocean', 'forest', 'fire', 'night', 'aurora'];
+    return gradients[index % gradients.length] as any;
+  };
+
+  const renderStep = ({ item, index }: { item: TripStepRow; index: number }) => (
+    <GradientCard
+      gradient={getStepGradient(index)}
+      style={styles.stepCard}
+      shadow="md"
+      borderRadius="lg"
+    >
+      <View style={styles.stepContent}>
+        <View style={styles.stepHeader}>
+          <View style={styles.stepNumber}>
+            <ThemedText style={[styles.stepNumberText, { color: theme.text }]}>{index + 1}</ThemedText>
+          </View>
+          <View style={styles.stepInfo}>
+            <ThemedText style={[styles.stepTitle, { color: theme.text }]} numberOfLines={2}>
+              {item.name}
+            </ThemedText>
+            {item.description && (
+              <ThemedText style={[styles.stepDescription, { color: theme.textSecondary }]} numberOfLines={2}>
+                {item.description}
+              </ThemedText>
+            )}
+          </View>
+          <View style={styles.stepActions}>
+            <TouchableOpacity
+              style={styles.stepActionButton}
+              onPress={() => focusOnStep(item, index)}
+            >
+              <ThemedText style={styles.stepActionIcon}>📍</ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.stepActionButton}
+              onPress={() => handleDeleteStep(item.id, item.name)}
+            >
+              <ThemedText style={styles.stepActionIcon}>🗑️</ThemedText>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.stepDetails}>
+          {item.startDate && (
+            <View style={styles.stepDateContainer}>
+              <ThemedTextI18n 
+                i18nKey="tripDetails.start" 
+                style={[styles.stepDateLabel, { color: theme.textSecondary }]}
+              />
+              <ThemedText style={[styles.stepDateValue, { color: theme.text }]}>
+                {formatDate(item.startDate)}
+              </ThemedText>
+            </View>
+          )}
+          
+          {item.endDate && (
+            <View style={styles.stepDateContainer}>
+              <ThemedTextI18n 
+                i18nKey="tripDetails.end" 
+                style={[styles.stepDateLabel, { color: theme.textSecondary }]}
+              />
+              <ThemedText style={[styles.stepDateValue, { color: theme.text }]}>
+                {formatDate(item.endDate)}
+              </ThemedText>
+            </View>
+          )}
+        </View>
+
+        {item.lat && item.lng && (
+          <View style={styles.stepLocationContainer}>
+            <ThemedText style={styles.stepLocationIcon}>📍</ThemedText>
+            <ThemedText style={styles.stepLocationText} numberOfLines={1}>
+              {item.lat.toFixed(4)}, {item.lng.toFixed(4)}
+            </ThemedText>
+          </View>
+        )}
+
+        {isReordering && (
+          <View style={styles.reorderButtons}>
+            <TouchableOpacity
+              style={[styles.reorderButton, index === 0 && styles.reorderButtonDisabled]}
+              onPress={() => moveStepUp(index)}
+              disabled={index === 0}
+            >
+              <ThemedText style={[styles.reorderButtonText, { color: theme.text }]}>↑</ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.reorderButton, index === steps.length - 1 && styles.reorderButtonDisabled]}
+              onPress={() => moveStepDown(index)}
+              disabled={index === steps.length - 1}
+            >
+              <ThemedText style={[styles.reorderButtonText, { color: theme.text }]}>↓</ThemedText>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    </GradientCard>
+  );
 
   if (!trip) {
     return (
-      <ThemedView style={styles.container}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ThemedText type="link">← Back</ThemedText>
-        </TouchableOpacity>
-        <ThemedText type="title" style={styles.title}>Loading trip...</ThemedText>
-      </ThemedView>
+      <GradientBackground gradient="primary" style={styles.container}>
+        <AnimatedWaves intensity="medium">
+          <View style={styles.loadingContainer}>
+            <ThemedText style={[styles.loadingText, { color: theme.text }]}>{t('tripDetails.loading')}</ThemedText>
+          </View>
+        </AnimatedWaves>
+      </GradientBackground>
     );
   }
 
   return (
-    <ThemedView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ThemedText type="link">← Back</ThemedText>
-        </TouchableOpacity>
-        
-        <ThemedText type="title" style={styles.title}>{trip.title}</ThemedText>
-        
-        {/* Trip Info */}
-        <View style={[styles.infoCard, { backgroundColor: theme.background, borderColor: theme.icon }]}>
-          <View style={styles.infoRow}>
-            <ThemedText style={[styles.infoLabel, { color: text }]}>Start Date</ThemedText>
-            <ThemedText style={[styles.infoValue, { color: text }]}>{formatDate(trip.startDate)}</ThemedText>
-          </View>
-          <View style={styles.infoRow}>
-            <ThemedText style={[styles.infoLabel, { color: text }]}>End Date</ThemedText>
-            <ThemedText style={[styles.infoValue, { color: text }]}>{formatDate(trip.endDate)}</ThemedText>
-          </View>
-        </View>
-
-        {/* Action Buttons */}
-        <View style={styles.actionButtons}>
-          <Link href={{ pathname: '/(app)/trips/[id]/new-step', params: { id: String(id) } }} asChild>
-            <TouchableOpacity style={[styles.actionButton, { backgroundColor: theme.tint }]}>
-              <ThemedText style={styles.actionButtonText}>+ Add Step</ThemedText>
-            </TouchableOpacity>
-          </Link>
-          <Link href={{ pathname: '/(app)/trips/[id]/journal', params: { id: String(id) } }} asChild>
-            <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#ff8c00' }]}>
-              <ThemedText style={styles.actionButtonText}>📖 Journal</ThemedText>
-            </TouchableOpacity>
-          </Link>
-          <Link href={{ pathname: '/(app)/trips/[id]/checklists', params: { id: String(id) } }} asChild>
-            <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#4CAF50' }]}>
-              <ThemedText style={styles.actionButtonText}>✅ Lists</ThemedText>
-            </TouchableOpacity>
-          </Link>
-          <Link href={{ pathname: '/(app)/trips/[id]/share', params: { id: String(id) } }} asChild>
-            <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#9C27B0' }]}>
-              <ThemedText style={styles.actionButtonText}>🔗 Share</ThemedText>
-            </TouchableOpacity>
-          </Link>
-        </View>
-
-        {/* Map Section */}
-        <View style={styles.section}>
-          <View style={styles.mapHeader}>
-            <ThemedText type="subtitle" style={[styles.sectionTitle, { color: text }]}>
-              Trip Map
-            </ThemedText>
-            <View style={styles.mapControls}>
+    <GradientBackground gradient="primary" style={styles.container}>
+      <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
               <TouchableOpacity 
-                style={[styles.mapControlButton, { backgroundColor: theme.tint }]}
-                onPress={() => setShowRouteView(!showRouteView)}
+                style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.2)' }]}
+                onPress={() => router.push('/(app)/(tabs)/trips')}
               >
-                <ThemedText style={styles.mapControlText}>
-                  {showRouteView ? '📍 Points' : '🛣️ Route'}
+                <ThemedText style={[styles.backButtonText, { color: theme.text }]}>
+                  ← Trips
                 </ThemedText>
               </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.mapControlButton, { backgroundColor: theme.tint }]}
-                onPress={focusOnAllSteps}
-              >
-                <ThemedText style={styles.mapControlText}>🔍 All</ThemedText>
-              </TouchableOpacity>
+              <View style={styles.headerContent}>
+                <ThemedText type="title" style={[styles.title, { color: theme.text }]}>
+                  {trip.title}
+                </ThemedText>
+                {trip.description && (
+                  <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
+                    {trip.description}
+                  </ThemedText>
+                )}
+                <View style={styles.tripDates}>
+                  {trip.startDate ? (
+                    <ThemedText style={styles.tripDate}>
+                      📅 Start: {formatDate(trip.startDate)}
+                    </ThemedText>
+                  ) : (
+                    <ThemedText style={styles.tripDate}>
+                      📅 No start date
+                    </ThemedText>
+                  )}
+                  {trip.endDate ? (
+                    <ThemedText style={styles.tripDate}>
+                      📅 End: {formatDate(trip.endDate)}
+                    </ThemedText>
+                  ) : (
+                    <ThemedText style={styles.tripDate}>
+                      📅 No end date
+                    </ThemedText>
+                  )}
+                </View>
+              </View>
+              <View style={styles.headerSpacer} />
             </View>
-          </View>
-          
-          <View style={[styles.mapContainer, { borderColor: theme.icon }]}>
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              initialRegion={initialRegion}
-              onPress={onMapPress}
-            >
-              {trip?.lat != null && trip?.lng != null ? (
-                <Marker
-                  coordinate={{ latitude: trip.lat, longitude: trip.lng }}
-                  title={trip.title || 'Trip Location'}
-                  pinColor="#ff6b6b"
-                />
-              ) : null}
-              {steps.map((step, index) => {
-                if (step.lat && step.lng) {
-                  const isSelected = selectedStepIndex === index;
-                  return (
+          </GlassCard>
+
+          <GlassCard style={styles.mapCard} blurIntensity={25}>
+            <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
+              {t('tripDetails.tripMap')} 🗺️
+            </ThemedText>
+            
+            <View style={styles.mapContainer}>
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                initialRegion={{
+                  latitude: trip.lat || 0,
+                  longitude: trip.lng || 0,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                }}
+              >
+                {steps.map((step, index) => (
+                  step.lat && step.lng && (
                     <Marker
                       key={step.id}
-                      coordinate={{ latitude: step.lat, longitude: step.lng }}
-                      title={`${index + 1}. ${step.name}`}
+                      coordinate={{ latitude: step.lat!, longitude: step.lng! }}
+                      title={step.name}
                       description={step.description || undefined}
-                      pinColor={isSelected ? "#ff6b6b" : theme.tint}
-                      onPress={() => focusOnStep(index)}
+                      pinColor={selectedStepIndex === index ? '#ff0000' : '#007AFF'}
                     />
-                  );
-                }
-                return null;
-              })}
-              {showRouteView && getRouteCoordinates().length > 1 ? (
-                <Polyline
-                  coordinates={getRouteCoordinates()}
-                  strokeColor={theme.tint}
-                  strokeWidth={3}
-                  lineDashPattern={[5, 5]}
-                />
-              ) : null}
-            </MapView>
-          </View>
-          
-          {/* Navigation Controls */}
-          {steps.length > 0 ? (
-            <View style={styles.navigationControls}>
-              <TouchableOpacity 
-                style={[styles.navButton, { backgroundColor: selectedStepIndex === 0 ? theme.icon : theme.tint }]}
-                onPress={navigateToPreviousStep}
-                disabled={selectedStepIndex === 0}
-              >
-                <ThemedText style={styles.navButtonText}>← Previous</ThemedText>
-              </TouchableOpacity>
-              
-              <View style={styles.stepIndicator}>
-                <ThemedText style={[styles.stepIndicatorText, { color: text }]}>
-                  {selectedStepIndex !== null ? `${selectedStepIndex + 1} / ${steps.length}` : 'Select Step'}
-                </ThemedText>
-              </View>
-              
-              <TouchableOpacity 
-                style={[styles.navButton, { backgroundColor: selectedStepIndex === steps.length - 1 ? theme.icon : theme.tint }]}
-                onPress={navigateToNextStep}
-                disabled={selectedStepIndex === steps.length - 1}
-              >
-                <ThemedText style={styles.navButtonText}>Next →</ThemedText>
-              </TouchableOpacity>
+                  )
+                ))}
+                
+                {getRouteCoordinates().length > 1 && (
+                  <Polyline
+                    coordinates={getRouteCoordinates()}
+                    strokeColor="#007AFF"
+                    strokeWidth={3}
+                  />
+                )}
+              </MapView>
             </View>
-          ) : null}
-          
-          <ThemedText style={[styles.mapHint, { color: text }]}>
-            {showRouteView 
-              ? 'Route view shows the path between steps. Tap markers to focus on specific steps.'
-              : 'Tap on the map to set the trip location. Steps with locations are shown as markers.'
-            }
-          </ThemedText>
-        </View>
 
-        {/* Steps List - Moved after map */}
-        <View style={styles.section}>
-          <View style={styles.stepsHeader}>
-            <ThemedText type="subtitle" style={[styles.sectionTitle, { color: text }]}>
-              Trip Steps ({steps.length})
-            </ThemedText>
-            {steps.length > 1 ? (
-              <TouchableOpacity 
-                style={[styles.reorderButton, { backgroundColor: isReordering ? '#ff6b6b' : theme.tint }]}
+            <View style={styles.mapActions}>
+              <GradientButton
+                title={t('tripDetails.showAllSteps')}
+                gradient="secondary"
+                size="sm"
+                onPress={focusOnAllSteps}
+              />
+              <GradientButton
+                title={showRouteView ? t('tripDetails.hideRoute') : t('tripDetails.showRoute')}
+                gradient="ocean"
+                size="sm"
+                onPress={() => setShowRouteView(!showRouteView)}
+              />
+            </View>
+          </GlassCard>
+
+          <View style={styles.actionButtons}>
+            {isTripPast() ? (
+              <GradientButton
+                title={t('buttons.addStepEnded')}
+                gradient="secondary"
+                size="md"
+                style={styles.actionButton}
+                disabled={true}
+              />
+            ) : (
+              <Link href={{ pathname: '/(app)/trips/[id]/new-step', params: { id: String(id) } }} asChild>
+                <GradientButton
+                  title={t('buttons.addStep')}
+                  gradient="primary"
+                  size="md"
+                  style={styles.actionButton}
+                />
+              </Link>
+            )}
+            <Link href={{ pathname: '/(app)/trips/[id]/journal', params: { id: String(id) } }} asChild>
+              <GradientButton
+                title={t('buttons.journal')}
+                gradient="sunset"
+                size="md"
+                style={styles.actionButton}
+              />
+            </Link>
+            <Link href={{ pathname: '/(app)/trips/[id]/checklists', params: { id: String(id) } }} asChild>
+              <GradientButton
+                title={t('buttons.lists')}
+                gradient="forest"
+                size="md"
+                style={styles.actionButton}
+              />
+            </Link>
+            <Link href={{ pathname: '/(app)/trips/[id]/share', params: { id: String(id) } }} asChild>
+              <GradientButton
+                title={t('buttons.share')}
+                gradient="aurora"
+                size="md"
+                style={styles.actionButton}
+              />
+            </Link>
+          </View>
+
+          <GlassCard style={styles.stepsCard} blurIntensity={20}>
+            <View style={styles.stepsHeader}>
+              <ThemedTextI18n 
+                i18nKey="tripDetails.tripSteps" 
+                i18nOptions={{ count: steps.length }}
+                style={[styles.sectionTitle, { color: theme.text }]}
+              />
+              <TouchableOpacity
+                style={[styles.reorderButton, isReordering && styles.reorderButtonActive]}
                 onPress={() => setIsReordering(!isReordering)}
               >
-                <ThemedText style={styles.reorderButtonText}>
-                  {isReordering ? '✓ Done' : '↕️ Reorder'}
+                <ThemedText style={[styles.reorderButtonText, { color: theme.text }]}>
+                  {isReordering ? t('common.done') : t('tripDetails.reorder')}
                 </ThemedText>
               </TouchableOpacity>
-            ) : null}
-          </View>
-          
-          {steps.length === 0 ? (
-            <View style={styles.emptyState}>
-              <ThemedText style={styles.emptyIcon}>🗺️</ThemedText>
-              <ThemedText style={[styles.emptyTitle, { color: text }]}>No steps yet</ThemedText>
-              <ThemedText style={[styles.emptyText, { color: text }]}>Add your first step to start planning your journey!</ThemedText>
             </View>
-          ) : (
-            <View style={styles.stepsList}>
-              {steps.map((step, index) => (
-                <View key={step.id} style={[styles.stepCard, { backgroundColor: theme.background, borderColor: theme.icon }]}>
-                  <View style={styles.stepHeader}>
-                    <View style={styles.stepNumber}>
-                      <ThemedText style={styles.stepNumberText}>{index + 1}</ThemedText>
-                    </View>
-                    <View style={styles.stepInfo}>
-                      <ThemedText style={[styles.stepName, { color: text }]}>{step.name}</ThemedText>
-                      {step.description ? (
-                        <ThemedText style={[styles.stepDescription, { color: text }]}>{step.description}</ThemedText>
-                      ) : null}
-                    </View>
-                    <View style={styles.stepActions}>
-                      {isReordering ? (
-                        <View style={styles.reorderControls}>
-                          <TouchableOpacity 
-                            style={[styles.reorderButton, { backgroundColor: index === 0 ? theme.icon : theme.tint }]}
-                            onPress={() => moveStepUp(index)}
-                            disabled={index === 0}
-                          >
-                            <ThemedText style={styles.reorderButtonText}>↑</ThemedText>
-                          </TouchableOpacity>
-                          <TouchableOpacity 
-                            style={[styles.reorderButton, { backgroundColor: index === steps.length - 1 ? theme.icon : theme.tint }]}
-                            onPress={() => moveStepDown(index)}
-                            disabled={index === steps.length - 1}
-                          >
-                            <ThemedText style={styles.reorderButtonText}>↓</ThemedText>
-                          </TouchableOpacity>
-                        </View>
-                      ) : null}
-                      <TouchableOpacity 
-                        style={styles.deleteStepButton}
-                        onPress={() => handleDeleteStep(step.id, step.name)}
-                      >
-                        <ThemedText style={styles.deleteStepIcon}>🗑️</ThemedText>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                  
-                  {(step.startDate || step.endDate) ? (
-                    <View style={styles.stepDates}>
-                      {step.startDate ? (
-                        <View style={styles.stepDateItem}>
-                          <ThemedText style={[styles.stepDateLabel, { color: text }]}>Start</ThemedText>
-                          <ThemedText style={[styles.stepDateValue, { color: text }]}>{formatDate(step.startDate)}</ThemedText>
-                        </View>
-                      ) : null}
-                      {step.endDate ? (
-                        <View style={styles.stepDateItem}>
-                          <ThemedText style={[styles.stepDateLabel, { color: text }]}>End</ThemedText>
-                          <ThemedText style={[styles.stepDateValue, { color: text }]}>{formatDate(step.endDate)}</ThemedText>
-                        </View>
-                      ) : null}
-                    </View>
-                  ) : null}
-                  
-                  {step.lat && step.lng ? (
-                    <View style={styles.stepLocation}>
-                      <ThemedText style={styles.locationIcon}>📍</ThemedText>
-                      <ThemedText style={[styles.locationText, { color: text }]}>Location set</ThemedText>
-                    </View>
-                  ) : null}
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-      </ScrollView>
-    </ThemedView>
+
+            {steps.length > 0 ? (
+              <FlatList
+                data={steps}
+                renderItem={renderStep}
+                keyExtractor={(item) => item.id.toString()}
+                scrollEnabled={false}
+                ItemSeparatorComponent={() => <View style={styles.stepSeparator} />}
+              />
+            ) : (
+              <View style={styles.emptyStepsContainer}>
+                <ThemedTextI18n 
+                  i18nKey="tripDetails.noStepsYet" 
+                  style={[styles.emptyStepsText, { color: theme.textSecondary }]}
+                />
+              </View>
+            )}
+          </GlassCard>
+        </ScrollView>
+      </AnimatedWaves>
+    </GradientBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  scrollView: { flex: 1, padding: 16 },
-  backButton: { marginBottom: 12 },
-  title: { marginBottom: 20, textAlign: 'center' },
-  
-  // Trip Info
-  infoCard: {
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 20,
+  container: {
+    flex: 1,
   },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+    gap: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 18,
+  },
+
+  // Header
+  headerCard: {
     marginBottom: 8,
   },
-  infoLabel: {
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginRight: 16,
+    borderRadius: 20,
+  },
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  headerContent: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  headerSpacer: {
+    width: 60,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.8,
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  tripDates: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  tripDate: {
     fontSize: 14,
     fontWeight: '600',
-    opacity: 0.7,
   },
-  infoValue: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  
-      // Action Buttons
-      actionButtons: {
-        flexDirection: 'row',
-        gap: 12,
-        marginBottom: 24,
-      },
-      actionButton: {
-        flex: 1,
-        paddingVertical: 12,
-        paddingHorizontal: 20,
-        borderRadius: 25,
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 3,
-      },
-      actionButtonText: {
-        color: 'white',
-        fontSize: 16,
-        fontWeight: '600',
-      },
-  
-  // Section
-  section: {
-    marginBottom: 24,
+
+  mapCard: {
+    marginBottom: 8,
   },
   sectionTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     marginBottom: 16,
   },
-  
-  // Empty State
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyIcon: {
-    fontSize: 48,
+  mapContainer: {
+    height: 250,
+    borderRadius: 12,
+    overflow: 'hidden',
     marginBottom: 16,
   },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+  map: {
+    flex: 1,
+  },
+  mapActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
+    minWidth: (width - 44) / 2,
+  },
+  stepsCard: {
     marginBottom: 8,
   },
-  emptyText: {
-    fontSize: 14,
-    opacity: 0.7,
-    textAlign: 'center',
-    paddingHorizontal: 20,
-  },
-  
-  // Steps List
   stepsHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
   },
-  reorderButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  reorderButtonText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  stepsList: {
-    gap: 12,
-  },
   stepCard: {
+    marginBottom: 0,
+  },
+  stepContent: {
     padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
   },
   stepHeader: {
     flexDirection: 'row',
@@ -561,145 +632,103 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#6c47ff',
-    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.3)',
     alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
   },
   stepNumberText: {
-    color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
   },
   stepInfo: {
     flex: 1,
+    marginRight: 12,
   },
-  stepName: {
-    fontSize: 16,
+  stepTitle: {
+    fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 4,
   },
   stepDescription: {
     fontSize: 14,
-    opacity: 0.8,
-    lineHeight: 20,
+    lineHeight: 18,
   },
   stepActions: {
     flexDirection: 'row',
-    alignItems: 'center',
     gap: 8,
   },
-  reorderControls: {
-    flexDirection: 'row',
-    gap: 4,
+  stepActionButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  deleteStepButton: {
-    padding: 8,
-  },
-  deleteStepIcon: {
+  stepActionIcon: {
     fontSize: 16,
   },
-  
-  // Step Dates
-  stepDates: {
+  stepDetails: {
     flexDirection: 'row',
-    gap: 20,
-    marginBottom: 12,
+    marginBottom: 8,
+    gap: 24,
   },
-  stepDateItem: {
+  stepDateContainer: {
     flex: 1,
   },
   stepDateLabel: {
     fontSize: 12,
+    marginBottom: 2,
     fontWeight: '600',
-    opacity: 0.7,
-    marginBottom: 4,
   },
   stepDateValue: {
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '600',
   },
-  
-  // Step Location
-  stepLocation: {
+  stepLocationContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 8,
   },
-  locationIcon: {
+  stepLocationIcon: {
     fontSize: 14,
     marginRight: 6,
   },
-  locationText: {
+  stepLocationText: {
     fontSize: 12,
-    opacity: 0.7,
+    flex: 1,
   },
-  
-  // Map
-  mapHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  mapControls: {
+  reorderButtons: {
     flexDirection: 'row',
     gap: 8,
+    marginTop: 8,
   },
-  mapControlButton: {
+  reorderButton: {
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  mapControlText: {
-    color: 'white',
-    fontSize: 12,
+  reorderButtonActive: {
+    backgroundColor: 'rgba(255,255,255,0.4)',
+  },
+  reorderButtonDisabled: {
+    opacity: 0.3,
+  },
+  reorderButtonText: {
+    fontSize: 14,
     fontWeight: '600',
   },
-  mapContainer: {
-    height: 250,
-    borderRadius: 12,
-    overflow: 'hidden',
-    borderWidth: 1,
-    marginBottom: 12,
+  stepSeparator: {
+    height: 12,
   },
-  map: {
-    flex: 1,
+  emptyStepsContainer: {
+    paddingVertical: 20,
+    alignItems: 'center',
   },
-  mapHint: {
-    fontSize: 12,
-    opacity: 0.7,
+  emptyStepsText: {
+    fontSize: 16,
     textAlign: 'center',
   },
-  
-  // Navigation Controls
-  navigationControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-    paddingHorizontal: 8,
-  },
-  navButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    minWidth: 80,
-    alignItems: 'center',
-  },
-  navButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  stepIndicator: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: 16,
-  },
-  stepIndicatorText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
 });
-
-

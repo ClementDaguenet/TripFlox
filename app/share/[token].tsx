@@ -1,51 +1,55 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { AnimatedWaves } from '@/components/ui/animated-waves';
+import { GlassCard } from '@/components/ui/glass-card';
+import { GradientBackground } from '@/components/ui/gradient-background';
 import { Colors } from '@/constants/theme';
-import { getChecklists, getJournalEntries, getTripById, getTripSteps } from '@/contexts/db';
+import { getChecklists, getJournalEntries, getTripById, getTripSteps, TripRow } from '@/contexts/db';
 import { getTripShareByToken } from '@/contexts/sharing';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
+import { useTranslation } from '@/hooks/use-translation';
 import { useFocusEffect } from '@react-navigation/native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Dimensions, FlatList, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Dimensions, FlatList, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
 
-export default function ShareViewScreen() {
+export default function ShareTokenScreen() {
+  const { t } = useTranslation();
   const { token } = useLocalSearchParams<{ token: string }>();
-  const [trip, setTrip] = useState<any>(null);
+  const [trip, setTrip] = useState<TripRow | null>(null);
   const [steps, setSteps] = useState<any[]>([]);
   const [journalEntries, setJournalEntries] = useState<any[]>([]);
   const [checklists, setChecklists] = useState<any[]>([]);
-  const [shareInfo, setShareInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const text = useThemeColor({}, 'text');
+  const text = theme.text;
   const insets = useSafeAreaInsets();
 
   const loadSharedTrip = useCallback(async () => {
-    if (!token) return;
-    
+    if (!token) {
+      setError('No share token provided');
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
+      setError(null);
       
-      // Get share information
+      // Check if the share token exists
       const share = await getTripShareByToken(token);
       if (!share) {
-        Alert.alert('Invalid Link', 'This share link is invalid or has expired.');
-        router.replace('/(app)/(tabs)/home');
+        setError('Invalid or expired share link');
         return;
       }
 
-      setShareInfo(share);
-
       // Check if share has expired
       if (share.expiresAt && share.expiresAt < Date.now()) {
-        Alert.alert('Expired Link', 'This share link has expired.');
-        router.replace('/(app)/(tabs)/home');
+        setError('This share link has expired');
         return;
       }
 
@@ -63,8 +67,7 @@ export default function ShareViewScreen() {
       setChecklists(checklistsData);
     } catch (error) {
       console.error('Error loading shared trip:', error);
-      Alert.alert('Error', 'Failed to load shared trip');
-      router.replace('/(app)/(tabs)/home');
+      setError('Failed to load shared trip');
     } finally {
       setLoading(false);
     }
@@ -77,182 +80,224 @@ export default function ShareViewScreen() {
   );
 
   const formatDate = (timestamp: number) => {
-    return new Date(timestamp).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
+    const date = new Date(timestamp);
+    return date.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric' 
     });
   };
 
   const renderStep = ({ item, index }: { item: any; index: number }) => (
-    <View style={[styles.stepCard, { backgroundColor: theme.background, borderColor: theme.icon }]}>
+    <GlassCard key={item.id} style={styles.stepCard} blurIntensity={20}>
       <View style={styles.stepHeader}>
-        <ThemedText style={[styles.stepNumber, { color: theme.tint }]}>
-          {index + 1}
-        </ThemedText>
-        <View style={styles.stepInfo}>
-          <ThemedText style={[styles.stepName, { color: text }]}>
+        <ThemedText style={[styles.stepNumber, { color: theme.text }]}>{index + 1}</ThemedText>
+        <View style={styles.stepContent}>
+          <ThemedText style={[styles.stepTitle, { color: theme.text }]}>
             {item.name}
           </ThemedText>
-          {item.description ? (
-            <ThemedText style={[styles.stepDescription, { color: text }]}>
+          {item.description && (
+            <ThemedText style={[styles.stepDescription, { color: theme.textSecondary }]}>
               {item.description}
             </ThemedText>
-          ) : null}
+          )}
+          {item.startDate && (
+            <ThemedText style={[styles.stepDate, { color: theme.textTertiary }]}>
+              📅 {formatDate(item.startDate)}
+            </ThemedText>
+          )}
         </View>
       </View>
-      
-      {(item.startDate || item.endDate) ? (
-        <View style={styles.stepDates}>
-          {item.startDate ? (
-            <ThemedText style={[styles.stepDate, { color: text }]}>
-              Start: {formatDate(item.startDate)}
-            </ThemedText>
-          ) : null}
-          {item.endDate ? (
-            <ThemedText style={[styles.stepDate, { color: text }]}>
-              End: {formatDate(item.endDate)}
-            </ThemedText>
-          ) : null}
-        </View>
-      ) : null}
-    </View>
+    </GlassCard>
   );
 
   const renderJournalEntry = ({ item }: { item: any }) => (
-    <View style={[styles.journalCard, { backgroundColor: theme.background, borderColor: theme.icon }]}>
-      <ThemedText style={[styles.journalTitle, { color: text }]}>
+    <GlassCard key={item.id} style={styles.entryCard} blurIntensity={20}>
+      <ThemedText style={[styles.entryTitle, { color: theme.text }]}>
         {item.title}
       </ThemedText>
-      <ThemedText style={[styles.journalDate, { color: text }]}>
-        {formatDate(item.entryDate)}
-      </ThemedText>
-      {item.content ? (
-        <ThemedText style={[styles.journalContent, { color: text }]}>
+      {item.content && (
+        <ThemedText style={[styles.entryContent, { color: theme.textSecondary }]}>
           {item.content}
         </ThemedText>
-      ) : null}
-    </View>
+      )}
+      <ThemedText style={[styles.entryDate, { color: theme.textTertiary }]}>
+        {formatDate(item.createdAt)}
+      </ThemedText>
+    </GlassCard>
   );
 
   const renderChecklist = ({ item }: { item: any }) => (
-    <View style={[styles.checklistCard, { backgroundColor: theme.background, borderColor: theme.icon }]}>
-      <ThemedText style={[styles.checklistTitle, { color: text }]}>
+    <GlassCard key={item.id} style={styles.checklistCard} blurIntensity={20}>
+      <ThemedText style={[styles.checklistTitle, { color: theme.text }]}>
         {item.name}
       </ThemedText>
-      {item.description ? (
-        <ThemedText style={[styles.checklistDescription, { color: text }]}>
+      {item.description && (
+        <ThemedText style={[styles.checklistDescription, { color: theme.textSecondary }]}>
           {item.description}
         </ThemedText>
-      ) : null}
-    </View>
+      )}
+    </GlassCard>
   );
 
   if (loading) {
     return (
-      <ThemedView style={styles.container}>
-        <ThemedText>Loading shared trip...</ThemedText>
-      </ThemedView>
+      <GradientBackground gradient="primary" style={styles.container}>
+        <AnimatedWaves intensity="medium">
+          <View style={styles.loadingContainer}>
+            <GlassCard style={styles.loadingCard} blurIntensity={30}>
+              <ThemedText style={[styles.loadingText, { color: theme.text }]}>{t('share.loadingSharedTrip')}</ThemedText>
+            </GlassCard>
+          </View>
+        </AnimatedWaves>
+      </GradientBackground>
+    );
+  }
+
+  if (error) {
+    return (
+      <GradientBackground gradient="primary" style={styles.container}>
+        <AnimatedWaves intensity="medium">
+          <View style={styles.errorContainer}>
+            <GlassCard style={styles.errorCard} blurIntensity={30}>
+              <ThemedText style={[styles.errorTitle, { color: theme.text }]}>❌ Error</ThemedText>
+              <ThemedText style={[styles.errorText, { color: theme.textSecondary }]}>
+                {error}
+              </ThemedText>
+              <TouchableOpacity
+                style={[styles.retryButton, { backgroundColor: theme.tint }]}
+                onPress={loadSharedTrip}
+              >
+                <ThemedText style={[styles.retryButtonText, { color: theme.text }]}>{t('common.retry')}</ThemedText>
+              </TouchableOpacity>
+            </GlassCard>
+          </View>
+        </AnimatedWaves>
+      </GradientBackground>
     );
   }
 
   if (!trip) {
     return (
-      <ThemedView style={styles.container}>
-        <ThemedText>Trip not found</ThemedText>
-      </ThemedView>
+      <GradientBackground gradient="primary" style={styles.container}>
+        <AnimatedWaves intensity="medium">
+          <View style={styles.errorContainer}>
+            <GlassCard style={styles.errorCard} blurIntensity={30}>
+              <ThemedText style={styles.errorTitle}>{t('share.tripNotFound')}</ThemedText>
+              <ThemedText style={[styles.errorText, { color: theme.textSecondary }]}>
+                {t('share.tripNotFoundDescription')}
+              </ThemedText>
+            </GlassCard>
+          </View>
+        </AnimatedWaves>
+      </GradientBackground>
     );
   }
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Header */}
-        <View style={styles.header}>
-          <ThemedText type="title" style={styles.title}>
-            {trip.title}
-          </ThemedText>
-          <ThemedText style={[styles.shareType, { color: shareInfo?.shareType === 'readonly' ? '#ff6b6b' : '#4CAF50' }]}>
-            {shareInfo?.shareType === 'readonly' ? '👁️ Read-Only View' : '🤝 Collaborative View'}
-          </ThemedText>
-        </View>
+    <GradientBackground gradient="primary" style={styles.container}>
+      <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header */}
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
+              <ThemedText style={styles.shareIcon}>🔗</ThemedText>
+              <ThemedText type="title" style={[styles.title, { color: theme.text }]}>
+                {trip.title}
+              </ThemedText>
+              {trip.description && (
+                <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
+                  {trip.description}
+                </ThemedText>
+              )}
+              <View style={styles.tripDates}>
+                {trip.startDate && (
+                  <ThemedText style={[styles.tripDate, { color: theme.textSecondary }]}>
+                    📅 {formatDate(trip.startDate)}
+                  </ThemedText>
+                )}
+                {trip.endDate && (
+                  <ThemedText style={[styles.tripDate, { color: theme.textSecondary }]}>
+                    📅 {formatDate(trip.endDate)}
+                  </ThemedText>
+                )}
+              </View>
+            </View>
+          </GlassCard>
 
-        {/* Trip Info */}
-        <View style={[styles.infoCard, { backgroundColor: theme.background, borderColor: theme.icon }]}>
-          <View style={styles.infoRow}>
-            <ThemedText style={[styles.infoLabel, { color: text }]}>Start Date</ThemedText>
-            <ThemedText style={[styles.infoValue, { color: text }]}>
-              {trip.startDate ? formatDate(trip.startDate) : 'Not set'}
-            </ThemedText>
-          </View>
-          <View style={styles.infoRow}>
-            <ThemedText style={[styles.infoLabel, { color: text }]}>End Date</ThemedText>
-            <ThemedText style={[styles.infoValue, { color: text }]}>
-              {trip.endDate ? formatDate(trip.endDate) : 'Not set'}
-            </ThemedText>
-          </View>
-        </View>
+          {/* Trip Steps */}
+          {steps.length > 0 && (
+            <GlassCard style={styles.sectionCard} blurIntensity={25}>
+              <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
+                Trip Steps ({steps.length})
+              </ThemedText>
+              <FlatList
+                data={steps}
+                renderItem={renderStep}
+                keyExtractor={(item) => item.id.toString()}
+                scrollEnabled={false}
+                ItemSeparatorComponent={() => <View style={styles.separator} />}
+              />
+            </GlassCard>
+          )}
 
-        {/* Trip Steps */}
-        {steps.length > 0 ? (
-          <View style={styles.section}>
-            <ThemedText type="subtitle" style={[styles.sectionTitle, { color: text }]}>
-              Trip Steps ({steps.length})
-            </ThemedText>
-            <FlatList
-              data={steps}
-              keyExtractor={(item) => String(item.id)}
-              renderItem={renderStep}
-              scrollEnabled={false}
-              contentContainerStyle={styles.stepsList}
-            />
-          </View>
-        ) : null}
+          {/* Journal Entries */}
+          {journalEntries.length > 0 && (
+            <GlassCard style={styles.sectionCard} blurIntensity={25}>
+              <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
+                Travel Journal ({journalEntries.length})
+              </ThemedText>
+              <FlatList
+                data={journalEntries}
+                renderItem={renderJournalEntry}
+                keyExtractor={(item) => item.id.toString()}
+                scrollEnabled={false}
+                ItemSeparatorComponent={() => <View style={styles.separator} />}
+              />
+            </GlassCard>
+          )}
 
-        {/* Journal Entries */}
-        {journalEntries.length > 0 ? (
-          <View style={styles.section}>
-            <ThemedText type="subtitle" style={[styles.sectionTitle, { color: text }]}>
-              Travel Journal ({journalEntries.length})
-            </ThemedText>
-            <FlatList
-              data={journalEntries}
-              keyExtractor={(item) => String(item.id)}
-              renderItem={renderJournalEntry}
-              scrollEnabled={false}
-              contentContainerStyle={styles.journalList}
-            />
-          </View>
-        ) : null}
+          {/* Checklists */}
+          {checklists.length > 0 && (
+            <GlassCard style={styles.sectionCard} blurIntensity={25}>
+              <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
+                Preparation Checklists ({checklists.length})
+              </ThemedText>
+              <FlatList
+                data={checklists}
+                renderItem={renderChecklist}
+                keyExtractor={(item) => item.id.toString()}
+                scrollEnabled={false}
+                ItemSeparatorComponent={() => <View style={styles.separator} />}
+              />
+            </GlassCard>
+          )}
 
-        {/* Checklists */}
-        {checklists.length > 0 ? (
-          <View style={styles.section}>
-            <ThemedText type="subtitle" style={[styles.sectionTitle, { color: text }]}>
-              Preparation Lists ({checklists.length})
+          {/* Download App CTA */}
+          <GlassCard style={styles.ctaCard} blurIntensity={20}>
+            <ThemedText style={styles.ctaTitle}>{t('share.createOwnTrips')}</ThemedText>
+            <ThemedText style={[styles.ctaDescription, { color: theme.textSecondary }]}>
+              {t('share.downloadDescription')}
             </ThemedText>
-            <FlatList
-              data={checklists}
-              keyExtractor={(item) => String(item.id)}
-              renderItem={renderChecklist}
-              scrollEnabled={false}
-              contentContainerStyle={styles.checklistsList}
-            />
-          </View>
-        ) : null}
-
-        {/* Footer */}
-        <View style={styles.footer}>
-          <ThemedText style={[styles.footerText, { color: text }]}>
-            Shared via Wox Tripflox
-          </ThemedText>
-        </View>
-      </ScrollView>
-    </ThemedView>
+            <TouchableOpacity
+              style={[styles.downloadButton, { backgroundColor: theme.tint }]}
+              onPress={() => {
+                // In a real app, this would open the app store
+                Alert.alert(t('share.downloadApp'), t('share.downloadAppDescription'));
+              }}
+            >
+              <ThemedText style={[styles.downloadButtonText, { color: theme.text }]}>
+                📱 {t('share.downloadAppButton')}
+              </ThemedText>
+            </TouchableOpacity>
+          </GlassCard>
+        </ScrollView>
+      </AnimatedWaves>
+    </GradientBackground>
   );
 }
 
@@ -265,117 +310,138 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16,
+    gap: 20,
   },
-  header: {
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 24,
+    padding: 20,
   },
-  title: {
+  loadingCard: {
+    padding: 30,
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 18,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorCard: {
+    padding: 30,
+    alignItems: 'center',
+    maxWidth: 300,
+  },
+  errorTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 12,
+  },
+  errorText: {
+    fontSize: 16,
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: 20,
   },
-  shareType: {
+  retryButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+  },
+  retryButtonText: {
     fontSize: 16,
     fontWeight: '600',
   },
-  infoCard: {
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 24,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  headerCard: {
     marginBottom: 8,
   },
-  infoLabel: {
-    fontSize: 14,
-    fontWeight: '500',
+  header: {
+    alignItems: 'center',
   },
-  infoValue: {
-    fontSize: 14,
-    fontWeight: '600',
+  shareIcon: {
+    fontSize: 40,
+    marginBottom: 12,
   },
-  section: {
-    marginBottom: 24,
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  tripDates: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  tripDate: {
+    fontSize: 14,
+    opacity: 0.8,
+  },
+  sectionCard: {
+    marginBottom: 8,
   },
   sectionTitle: {
-    marginBottom: 16,
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
-  },
-  stepsList: {
-    paddingBottom: 16,
+    marginBottom: 16,
   },
   stepCard: {
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   stepHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
+    alignItems: 'flex-start',
   },
   stepNumber: {
     fontSize: 18,
     fontWeight: 'bold',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    textAlign: 'center',
+    lineHeight: 30,
     marginRight: 12,
-    minWidth: 24,
   },
-  stepInfo: {
+  stepContent: {
     flex: 1,
   },
-  stepName: {
+  stepTitle: {
     fontSize: 16,
     fontWeight: '600',
     marginBottom: 4,
   },
   stepDescription: {
     fontSize: 14,
-    opacity: 0.7,
-  },
-  stepDates: {
-    marginTop: 8,
+    marginBottom: 4,
   },
   stepDate: {
     fontSize: 12,
-    opacity: 0.6,
   },
-  journalList: {
-    paddingBottom: 16,
-  },
-  journalCard: {
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 12,
-  },
-  journalTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  journalDate: {
-    fontSize: 12,
-    opacity: 0.6,
+  entryCard: {
     marginBottom: 8,
   },
-  journalContent: {
-    fontSize: 14,
-    lineHeight: 20,
+  entryTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
   },
-  checklistsList: {
-    paddingBottom: 16,
+  entryContent: {
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  entryDate: {
+    fontSize: 12,
   },
   checklistCard: {
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   checklistTitle: {
     fontSize: 16,
@@ -384,17 +450,32 @@ const styles = StyleSheet.create({
   },
   checklistDescription: {
     fontSize: 14,
-    opacity: 0.7,
   },
-  footer: {
+  separator: {
+    height: 8,
+  },
+  ctaCard: {
+    marginBottom: 8,
     alignItems: 'center',
-    marginTop: 24,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.1)',
   },
-  footerText: {
-    fontSize: 12,
-    opacity: 0.6,
+  ctaTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  ctaDescription: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  downloadButton: {
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+  },
+  downloadButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });

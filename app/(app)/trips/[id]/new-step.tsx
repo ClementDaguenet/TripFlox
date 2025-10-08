@@ -1,18 +1,25 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
+import { AnimatedWaves } from '@/components/ui/animated-waves';
+import { GlassCard } from '@/components/ui/glass-card';
+import { GradientBackground } from '@/components/ui/gradient-background';
+import { GradientButton } from '@/components/ui/gradient-button';
 import { Colors } from '@/constants/theme';
-import { getTripSteps, insertTripStep } from '@/contexts/db';
+import { getTripById, getTripSteps, insertTripStep, TripRow } from '@/contexts/db';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
-import RNDateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import { useTranslation } from '@/hooks/use-translation';
+import RNDateTimePicker from '@react-native-community/datetimepicker';
 import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Dimensions, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+const { width } = Dimensions.get('window');
+
 export default function NewStepScreen() {
+  const { t } = useTranslation();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -27,16 +34,33 @@ export default function NewStepScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [steps, setSteps] = useState<any[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [trip, setTrip] = useState<TripRow | null>(null);
   const mapRef = useRef<MapView>(null);
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const border = useThemeColor({}, 'icon');
-  const text = useThemeColor({}, 'text');
+  const border = theme.border;
+  const text = theme.text;
   const insets = useSafeAreaInsets();
+
+  // Vérifier si le voyage est passé
+  const isTripPast = () => {
+    if (!trip?.endDate) return false;
+    const today = new Date();
+    const tripEndDate = new Date(trip.endDate);
+    return tripEndDate < today;
+  };
 
   useEffect(() => {
     loadSteps();
+    loadTrip();
   }, []);
+
+  const loadTrip = async () => {
+    if (!id) return;
+    const tripData = await getTripById(Number(id), 0); // userId pas important pour cette vérification
+    setTrip(tripData);
+  };
 
   const loadSteps = async () => {
     if (!id) return;
@@ -46,33 +70,41 @@ export default function NewStepScreen() {
 
   const handleSave = async () => {
     setError(null);
-    if (!name.trim()) {
-      setError('Step name is required');
-      return;
-    }
-    if (!id) {
-      setError('Trip ID is missing');
-      return;
-    }
-
+    setIsSaving(true);
+    
     try {
-      const nextOrder = steps.length + 1;
+      if (!name.trim()) {
+        setError(t('newStep.stepNameRequired'));
+        return;
+      }
+      
+      if (!id) {
+        setError(t('newStep.tripIdMissing'));
+        return;
+      }
+
+      const start = startDate ? startDate.getTime() : null;
+      const end = endDate ? endDate.getTime() : null;
+      const order = steps.length + 1;
+
       await insertTripStep({
         tripId: Number(id),
         name: name.trim(),
         description: description.trim() || null,
-        startDate: startDate ? startDate.getTime() : null,
-        endDate: endDate ? endDate.getTime() : null,
-        lat,
-        lng,
-        order: nextOrder,
+        startDate: start,
+        endDate: end,
+        lat: lat,
+        lng: lng,
+        order: order,
       });
-      
-      Alert.alert('Success', 'Step added successfully!', [
-        { text: 'OK', onPress: () => router.back() }
-      ]);
-    } catch (error) {
-      setError('Failed to save step');
+
+      Alert.alert(t('common.success'), t('newStep.stepCreatedSuccess'));
+      router.back();
+    } catch (err) {
+      setError(t('newStep.stepCreationFailed'));
+      Alert.alert(t('common.error'), t('newStep.stepCreationFailed'));
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -87,7 +119,7 @@ export default function NewStepScreen() {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission required', 'Location permission is needed to show your current position on the map.');
+        Alert.alert(t('newStep.permissionDenied'), t('newStep.locationPermissionRequired'));
         return;
       }
 
@@ -100,232 +132,406 @@ export default function NewStepScreen() {
         mapRef.current.animateToRegion({
           latitude,
           longitude,
-          latitudeDelta: 0.0922,
-          longitudeDelta: 0.0421,
-        }, 1000);
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        });
       }
     } catch (error) {
-      Alert.alert('Error', 'Could not get your current location. Please try again.');
+      Alert.alert(t('common.error'), t('newStep.locationError'));
     } finally {
       setIsLoadingLocation(false);
     }
   };
 
-  const searchLocation = async () => {
-    if (!searchQuery.trim()) return;
-    
-    setIsSearching(true);
-    try {
-      const results = await Location.geocodeAsync(searchQuery);
-      if (results.length > 0) {
-        const { latitude, longitude } = results[0];
-        setLat(latitude);
-        setLng(longitude);
-        
-        if (mapRef.current) {
-          mapRef.current.animateToRegion({
-            latitude,
-            longitude,
-            latitudeDelta: 0.0922,
-            longitudeDelta: 0.0421,
-          }, 1000);
-        }
-      } else {
-        Alert.alert('No results', 'No location found for your search. Please try a different search term.');
-      }
-    } catch (error) {
-      Alert.alert('Search error', 'Could not search for the location. Please try again.');
-    } finally {
-      setIsSearching(false);
-    }
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric' 
+    });
   };
 
-  const onChangeStartDate = (_: any, selectedDate?: Date) => {
-    const currentDate = selectedDate || startDate;
-    setStartDate(currentDate);
-    setShowStart(false); // Hide picker after selection
-  };
-
-  const onChangeEndDate = (_: any, selectedDate?: Date) => {
-    const currentDate = selectedDate || endDate;
-    setEndDate(currentDate);
-    setShowEnd(false); // Hide picker after selection
-  };
-
-  const showMode = (currentMode: 'date' | 'time', isStart: boolean) => {
-    if (Platform.OS === 'android') {
-      DateTimePickerAndroid.open({
-        value: (isStart ? startDate : endDate) ?? new Date(),
-        onChange: isStart ? onChangeStartDate : onChangeEndDate,
-        mode: currentMode,
-        is24Hour: true,
-      });
-    } else {
-      if (isStart) setShowStart(true);
-      else setShowEnd(true);
-    }
-  };
+  // Vérifier si le voyage est passé et afficher un message d'erreur
+  if (trip && isTripPast()) {
+    return (
+      <GradientBackground gradient="primary" style={styles.container}>
+        <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+          <View style={styles.errorContainer}>
+            <GlassCard style={styles.errorCard} blurIntensity={20}>
+              <ThemedTextI18n 
+                i18nKey="newStep.cannotAddStep" 
+                style={[styles.errorTitle, { color: theme.text }]}
+              />
+              <ThemedTextI18n 
+                i18nKey="newStep.tripEndedMessage" 
+                style={[styles.errorMessage, { color: theme.textSecondary }]}
+              />
+              <GradientButton
+                title={t('newStep.backToTrip')}
+                gradient="secondary"
+                size="md"
+                style={styles.backButton}
+                onPress={() => router.back()}
+              />
+            </GlassCard>
+          </View>
+        </AnimatedWaves>
+      </GradientBackground>
+    );
+  }
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ThemedText type="link">← Back</ThemedText>
-        </TouchableOpacity>
-        <ThemedText type="title" style={styles.title}>Add Step</ThemedText>
-        
-        {!!error && <ThemedText style={styles.error}>{error}</ThemedText>}
-        
-        <View style={styles.inputGroup}>
-          <ThemedText style={styles.label}>Step Name *</ThemedText>
-          <TextInput 
-            style={[styles.input, { borderColor: border, color: text }]} 
-            placeholderTextColor={border} 
-            placeholder="Enter step name" 
-            value={name} 
-            onChangeText={setName} 
-          />
-        </View>
-
-        <View style={styles.inputGroup}>
-          <ThemedText style={styles.label}>Description</ThemedText>
-          <TextInput 
-            style={[styles.input, styles.textArea, { borderColor: border, color: text }]} 
-            placeholderTextColor={border} 
-            placeholder="Enter step description" 
-            value={description} 
-            onChangeText={setDescription}
-            multiline
-            numberOfLines={3}
-          />
-        </View>
-
-        <View style={styles.dateRow}>
-          <View style={styles.dateGroup}>
-            <ThemedText style={styles.label}>Start Date</ThemedText>
-            <Button 
-              title={startDate ? `Start: ${startDate.toDateString()}` : 'Pick start date'} 
-              onPress={() => showMode('date', true)} 
-            />
-          </View>
-          <View style={styles.dateGroup}>
-            <ThemedText style={styles.label}>End Date</ThemedText>
-            <Button 
-              title={endDate ? `End: ${endDate.toDateString()}` : 'Pick end date'} 
-              onPress={() => showMode('date', false)} 
-            />
-          </View>
-        </View>
-
-        {Platform.OS === 'ios' && showStart ? (
-          <RNDateTimePicker 
-            value={startDate ?? new Date()} 
-            mode="date" 
-            display="inline" 
-            onChange={onChangeStartDate} 
-          />
-        ) : null}
-        {Platform.OS === 'ios' && showEnd ? (
-          <RNDateTimePicker 
-            value={endDate ?? new Date()} 
-            mode="date" 
-            display="inline" 
-            onChange={onChangeEndDate} 
-          />
-        ) : null}
-
-        <View style={styles.inputGroup}>
-          <ThemedText style={styles.label}>Location (Optional)</ThemedText>
-          <ThemedText style={styles.subLabel}>Tap on map or search below to set location</ThemedText>
-          <View style={[styles.mapContainer, { borderColor: border }]}>
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              initialRegion={{
-                latitude: lat ?? 48.8566,
-                longitude: lng ?? 2.3522,
-                latitudeDelta: 0.0922,
-                longitudeDelta: 0.0421,
-              }}
-              onPress={onMapPress}
-            >
-              {lat && lng ? (
-                <Marker
-                  coordinate={{ latitude: lat, longitude: lng }}
-                  title="Step Location"
-                />
-              ) : null}
-            </MapView>
-          </View>
-          
-          <View style={styles.locationSection}>
-            <View style={styles.searchContainer}>
-              <TextInput
-                style={[styles.searchInput, { borderColor: border, color: text }]}
-                placeholder="Search for a location..."
-                placeholderTextColor={border}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                onSubmitEditing={searchLocation}
-                returnKeyType="search"
-              />
+    <GradientBackground gradient="primary" style={styles.container}>
+      <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header */}
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
               <TouchableOpacity 
-                style={[styles.searchButton, { borderColor: border }]} 
-                onPress={searchLocation}
-                disabled={isSearching || !searchQuery.trim()}
+                style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.2)' }]}
+                onPress={() => router.back()}
               >
-                <ThemedText style={[styles.searchButtonText, { color: text }]}>
-                  {isSearching ? '...' : '🔍'}
-                </ThemedText>
+                <ThemedTextI18n 
+                  i18nKey="common.back" 
+                  style={[styles.backButtonText, { color: theme.text }]}
+                />
               </TouchableOpacity>
+              <View style={styles.headerContent}>
+                <ThemedTextI18n 
+                  i18nKey="newStep.title" 
+                  type="title" 
+                  style={[styles.title, { color: theme.text }]}
+                />
+                <ThemedTextI18n 
+                  i18nKey="newStep.subtitle" 
+                  style={[styles.subtitle, { color: theme.textSecondary }]}
+                />
+              </View>
+              <View style={styles.headerSpacer} />
             </View>
-            
-            <TouchableOpacity 
-              style={[styles.locationButton, { borderColor: border }]} 
+          </GlassCard>
+
+          {/* Step Details Form */}
+          <GlassCard style={styles.formCard} blurIntensity={25}>
+            <View style={styles.form}>
+              <View style={styles.inputContainer}>
+                <ThemedTextI18n 
+                  i18nKey="newStep.stepName" 
+                  style={[styles.inputLabel, { color: theme.text }]}
+                />
+                <TextInput
+                  style={[styles.input, { 
+                    borderColor: border, 
+                    color: text,
+                    backgroundColor: theme.backgroundSecondary 
+                  }]}
+                  placeholder={t('newStep.stepNamePlaceholder')}
+                  placeholderTextColor={theme.textTertiary}
+                  value={name}
+                  onChangeText={setName}
+                />
+              </View>
+
+              <View style={styles.inputContainer}>
+                <ThemedTextI18n 
+                  i18nKey="newStep.description" 
+                  style={[styles.inputLabel, { color: theme.text }]}
+                />
+                <TextInput
+                  style={[styles.textArea, { 
+                    borderColor: border, 
+                    color: text,
+                    backgroundColor: theme.backgroundSecondary 
+                  }]}
+                  placeholder={t('newStep.descriptionPlaceholder')}
+                  placeholderTextColor={theme.textTertiary}
+                  multiline
+                  numberOfLines={3}
+                  value={description}
+                  onChangeText={setDescription}
+                />
+              </View>
+
+              <View style={styles.dateRow}>
+                <View style={styles.dateContainer}>
+                  <ThemedTextI18n 
+                    i18nKey="newStep.startDate" 
+                    style={[styles.inputLabel, { color: theme.text }]}
+                  />
+                  <TouchableOpacity
+                    style={[styles.dateButton, { 
+                      borderColor: border,
+                      backgroundColor: theme.backgroundSecondary 
+                    }]}
+                    onPress={() => setShowStart(true)}
+                  >
+                    <ThemedText style={[styles.dateText, { color: text }]}>
+                      {startDate ? formatDate(startDate) : t('newStep.selectStartDate')}
+                    </ThemedText>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.dateContainer}>
+                  <ThemedTextI18n 
+                    i18nKey="newStep.endDate" 
+                    style={[styles.inputLabel, { color: theme.text }]}
+                  />
+                  <TouchableOpacity
+                    style={[styles.dateButton, { 
+                      borderColor: border,
+                      backgroundColor: theme.backgroundSecondary 
+                    }]}
+                    onPress={() => setShowEnd(true)}
+                  >
+                    <ThemedText style={[styles.dateText, { color: text }]}>
+                      {endDate ? formatDate(endDate) : t('newStep.selectEndDate')}
+                    </ThemedText>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {error && (
+                <View style={styles.errorContainer}>
+                  <ThemedText style={styles.errorText}>
+                    {error}
+                  </ThemedText>
+                </View>
+              )}
+            </View>
+          </GlassCard>
+
+          {/* Location Map */}
+          <GlassCard style={styles.mapCard} blurIntensity={20}>
+            <ThemedTextI18n 
+              i18nKey="newStep.locationOptional" 
+              style={[styles.sectionTitle, { color: theme.text }]}
+            />
+            <View style={styles.mapContainer}>
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                onPress={onMapPress}
+                initialRegion={{
+                  latitude: lat || 0,
+                  longitude: lng || 0,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                }}
+              >
+                {lat && lng && (
+                  <Marker
+                    coordinate={{ latitude: lat, longitude: lng }}
+                    title={t('newStep.stepLocation')}
+                  />
+                )}
+              </MapView>
+            </View>
+            <GradientButton
+              title={isLoadingLocation ? t('newStep.gettingLocation') : t('newStep.useCurrentLocation')}
+              gradient="secondary"
+              size="md"
+              style={styles.locationButton}
               onPress={getCurrentLocation}
               disabled={isLoadingLocation}
-            >
-              <ThemedText style={[styles.locationButtonText, { color: text }]}>
-                {isLoadingLocation ? 'Getting location...' : '📍 Use my current location'}
-              </ThemedText>
-            </TouchableOpacity>
-          </View>
-        </View>
+            />
+          </GlassCard>
 
-        <View style={styles.buttonContainer}>
-          <Button title="Add Step" onPress={handleSave} />
-        </View>
-      </ScrollView>
-    </ThemedView>
+          {/* Save Button */}
+          <GradientButton
+            title={isSaving ? t('newStep.creatingStep') : t('newStep.createStep')}
+            gradient="primary"
+            size="xl"
+            style={styles.saveButton}
+            onPress={handleSave}
+            disabled={isSaving}
+          />
+        </ScrollView>
+      </AnimatedWaves>
+
+      {/* Date Pickers */}
+      {showStart && (
+        <RNDateTimePicker
+          value={startDate || new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, selectedDate) => {
+            setShowStart(false);
+            if (selectedDate) {
+              setStartDate(selectedDate);
+            }
+          }}
+        />
+      )}
+
+      {showEnd && (
+        <RNDateTimePicker
+          value={endDate || new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, selectedDate) => {
+            setShowEnd(false);
+            if (selectedDate) {
+              setEndDate(selectedDate);
+            }
+          }}
+        />
+      )}
+    </GradientBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  scrollView: { flex: 1 },
-  scrollContent: { padding: 16 },
-  title: { textAlign: 'center', marginBottom: 20 },
-  backButton: { marginBottom: 12 },
-  inputGroup: { marginBottom: 20 },
-  label: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
-  subLabel: { fontSize: 14, opacity: 0.7, marginBottom: 8 },
-  input: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, fontSize: 16 },
-  textArea: { height: 80, textAlignVertical: 'top' },
-  dateRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  dateGroup: { flex: 1 },
-  mapContainer: { height: 200, borderRadius: 12, overflow: 'hidden', borderWidth: 1, marginBottom: 12 },
-  map: { flex: 1 },
-  locationSection: { marginBottom: 12 },
-  searchContainer: { flexDirection: 'row', marginBottom: 8, gap: 8 },
-  searchInput: { flex: 1, borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, fontSize: 16 },
-  searchButton: { borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', minWidth: 50 },
-  searchButtonText: { fontSize: 16 },
-  locationButton: { borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center' },
-  locationButtonText: { fontSize: 14, fontWeight: '500' },
-  buttonContainer: { marginTop: 20 },
-  error: { color: 'red', marginBottom: 8, textAlign: 'center' },
+  container: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+    gap: 20,
+  },
+
+  // Header
+  headerCard: {
+    marginBottom: 8,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginRight: 16,
+    borderRadius: 20,
+  },
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  headerContent: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  headerSpacer: {
+    width: 60, // Same width as back button to center the content
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.8,
+  },
+
+  // Form
+  formCard: {
+    marginBottom: 8,
+  },
+  form: {
+    gap: 20,
+  },
+  inputContainer: {
+    gap: 8,
+  },
+  inputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+  },
+  textArea: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  dateRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  dateContainer: {
+    flex: 1,
+    gap: 8,
+  },
+  dateButton: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    justifyContent: 'center',
+  },
+  dateText: {
+    fontSize: 16,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  errorCard: {
+    width: '100%',
+    alignItems: 'center',
+    padding: 24,
+  },
+  errorTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  errorMessage: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+
+  // Map
+  mapCard: {
+    marginBottom: 8,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 12,
+  },
+  mapContainer: {
+    height: 200,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 12,
+  },
+  map: {
+    flex: 1,
+  },
+  locationButton: {
+    marginBottom: 0,
+  },
+
+  // Save Button
+  saveButton: {
+    marginTop: 8,
+  },
 });

@@ -1,13 +1,17 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
+import { AnimatedWaves } from '@/components/ui/animated-waves';
+import { GlassCard } from '@/components/ui/glass-card';
+import { GradientBackground } from '@/components/ui/gradient-background';
+import { GradientButton } from '@/components/ui/gradient-button';
+import { GradientCard } from '@/components/ui/gradient-card';
 import { Colors } from '@/constants/theme';
 import { clearOfflineData, getOfflineDataSize, getSyncStatus, prepareOfflineData, setSyncStatus } from '@/contexts/offline';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
+import { useTranslation } from '@/hooks/use-translation';
 import { useFocusEffect } from '@react-navigation/native';
-import { router } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Dimensions, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Alert, Dimensions, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -19,9 +23,10 @@ export default function OfflineModeScreen() {
   const [isSyncing, setIsSyncing] = useState(false);
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const text = useThemeColor({}, 'text');
-  const border = useThemeColor({}, 'icon');
+  const text = theme.text;
+  const border = theme.icon;
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
 
   const loadStatus = useCallback(async () => {
     try {
@@ -48,14 +53,14 @@ export default function OfflineModeScreen() {
       const offlineData = await prepareOfflineData();
       
       Alert.alert(
-        'Offline Data Prepared',
-        `Successfully prepared offline data:\n• ${offlineData.trips.length} trips\n• ${offlineData.tripSteps.length} steps\n• ${offlineData.journalEntries.length} journal entries\n• ${offlineData.checklists.length} checklists`,
-        [{ text: 'OK' }]
+        t('alerts.offlineDataPrepared'),
+        t('alerts.offlineDataPreparedMessage', { count: offlineData.trips.length }),
+        [{ text: t('common.ok') }]
       );
-      
       loadStatus();
     } catch (error) {
-      Alert.alert('Error', 'Failed to prepare offline data');
+      console.error('Error preparing offline data:', error);
+      Alert.alert(t('common.error'), t('alerts.failedToPrepareOfflineData'));
     } finally {
       setIsPreparing(false);
     }
@@ -64,21 +69,15 @@ export default function OfflineModeScreen() {
   const handleSyncData = async () => {
     setIsSyncing(true);
     try {
-      await setSyncStatus('pending');
-      setSyncStatusState('pending');
-      
       // Simulate sync process
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
       await setSyncStatus('synced');
-      setSyncStatusState('synced');
       
-      Alert.alert('Success', 'Data synced successfully!');
+      Alert.alert(t('common.success'), t('alerts.dataSynchronized'));
       loadStatus();
     } catch (error) {
-      await setSyncStatus('error');
-      setSyncStatusState('error');
-      Alert.alert('Error', 'Failed to sync data');
+      console.error('Error syncing data:', error);
+      Alert.alert(t('common.error'), t('alerts.failedToSyncData'));
     } finally {
       setIsSyncing(false);
     }
@@ -86,22 +85,20 @@ export default function OfflineModeScreen() {
 
   const handleClearOfflineData = () => {
     Alert.alert(
-      'Clear Offline Data',
-      'Are you sure you want to clear all offline data? This action cannot be undone.',
+      t('alerts.clearOfflineData'),
+      t('alerts.clearOfflineDataMessage'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         { 
-          text: 'Clear', 
+          text: t('alerts.clear'), 
           style: 'destructive', 
           onPress: async () => {
             try {
               await clearOfflineData();
-              await setSyncStatus('synced');
-              setSyncStatusState('synced');
               setOfflineDataSize(0);
-              Alert.alert('Success', 'Offline data cleared');
+              Alert.alert(t('common.success'), t('alerts.offlineDataCleared'));
             } catch (error) {
-              Alert.alert('Error', 'Failed to clear offline data');
+              Alert.alert(t('common.error'), t('alerts.failedToClearOfflineData'));
             }
           }
         }
@@ -111,19 +108,28 @@ export default function OfflineModeScreen() {
 
   const getStatusColor = (status: string | null) => {
     switch (status) {
-      case 'synced': return '#4CAF50';
-      case 'pending': return '#ff8c00';
-      case 'error': return '#ff4444';
+      case 'synced': return '#10b981';
+      case 'pending': return '#f59e0b';
+      case 'error': return '#ef4444';
       default: return theme.icon;
     }
   };
 
   const getStatusText = (status: string | null) => {
     switch (status) {
-      case 'synced': return 'Synced';
-      case 'pending': return 'Syncing...';
-      case 'error': return 'Sync Error';
-      default: return 'Unknown';
+      case 'synced': return t('status.synced');
+      case 'pending': return t('status.syncing');
+      case 'error': return t('status.syncError');
+      default: return t('status.unknown');
+    }
+  };
+
+  const getStatusIcon = (status: string | null) => {
+    switch (status) {
+      case 'synced': return '✅';
+      case 'pending': return '⏳';
+      case 'error': return '❌';
+      default: return '❓';
     }
   };
 
@@ -136,120 +142,151 @@ export default function OfflineModeScreen() {
   };
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-      {/* Header with Back Button */}
-      <View style={[styles.header, { borderBottomColor: border }]}>
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => router.back()}
+    <GradientBackground gradient="primary" style={styles.container}>
+      <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
+          showsVerticalScrollIndicator={false}
         >
-          <ThemedText style={[styles.backButtonText, { color: theme.tint }]}>
-            ← Back
-          </ThemedText>
-        </TouchableOpacity>
-        <ThemedText type="title" style={styles.headerTitle}>Offline Mode</ThemedText>
-        <View style={styles.headerSpacer} />
-      </View>
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
+              <View style={styles.headerContent}>
+                <ThemedTextI18n 
+                  i18nKey="offline.title" 
+                  type="title" 
+                  style={[styles.title, { color: theme.text }]}
+                />
+                <ThemedTextI18n 
+                  i18nKey="offline.subtitle" 
+                  style={[styles.subtitle, { color: theme.textSecondary }]}
+                />
+              </View>
+            </View>
+          </GlassCard>
 
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <ThemedText style={[styles.subtitle, { color: text }]}>
-          Manage your offline data and synchronization
-        </ThemedText>
-
-        {/* Status Card */}
-        <View style={[styles.statusCard, { backgroundColor: theme.background, borderColor: theme.icon }]}>
-          <View style={styles.statusHeader}>
-            <ThemedText style={[styles.statusTitle, { color: text }]}>Sync Status</ThemedText>
-            <View style={[styles.statusIndicator, { backgroundColor: getStatusColor(syncStatus) }]} />
-          </View>
-          <ThemedText style={[styles.statusText, { color: getStatusColor(syncStatus) }]}>
-            {getStatusText(syncStatus)}
-          </ThemedText>
-          <ThemedText style={[styles.dataSize, { color: text }]}>
-            Offline data: {formatDataSize(offlineDataSize)}
-          </ThemedText>
-        </View>
-
-        {/* Actions */}
-        <View style={styles.actionsSection}>
-          <ThemedText type="subtitle" style={[styles.sectionTitle, { color: text }]}>
-            Actions
-          </ThemedText>
-          
-          <TouchableOpacity 
-            style={[styles.actionButton, { backgroundColor: theme.tint }]}
-            onPress={handlePrepareOfflineData}
-            disabled={isPreparing}
+          <GradientCard 
+            gradient="ocean" 
+            style={styles.statusCard}
+            shadow="lg"
+            borderRadius="xl"
           >
-            <ThemedText style={styles.actionButtonText}>
-              {isPreparing ? 'Preparing...' : '📱 Prepare Offline Data'}
-            </ThemedText>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.actionButton, { backgroundColor: '#4CAF50' }]}
-            onPress={handleSyncData}
-            disabled={isSyncing || syncStatus === 'pending'}
-          >
-            <ThemedText style={styles.actionButtonText}>
-              {isSyncing ? 'Syncing...' : '🔄 Sync Data'}
-            </ThemedText>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.actionButton, { backgroundColor: '#ff4444' }]}
-            onPress={handleClearOfflineData}
-          >
-            <ThemedText style={styles.actionButtonText}>🗑️ Clear Offline Data</ThemedText>
-          </TouchableOpacity>
-        </View>
+            <View style={styles.statusContent}>
+              <View style={styles.statusHeader}>
+                <ThemedText style={styles.statusIcon}>
+                  {getStatusIcon(syncStatus)}
+                </ThemedText>
+                <ThemedText style={[styles.statusTitle, { color: theme.text }]}>
+                  Sync Status
+                </ThemedText>
+              </View>
+              <ThemedText style={[styles.statusText, { color: getStatusColor(syncStatus) }]}>
+                {getStatusText(syncStatus)}
+              </ThemedText>
+              <ThemedText style={styles.dataSize}>
+                Offline Data: {formatDataSize(offlineDataSize)}
+              </ThemedText>
+            </View>
+          </GradientCard>
 
-        {/* Information */}
-        <View style={styles.infoSection}>
-          <ThemedText type="subtitle" style={[styles.sectionTitle, { color: text }]}>
-            About Offline Mode
-          </ThemedText>
-          
-          <View style={[styles.infoCard, { backgroundColor: 'rgba(0,0,0,0.05)' }]}>
-            <ThemedText style={[styles.infoText, { color: text }]}>
-              • <ThemedText style={styles.bold}>Prepare Offline Data:</ThemedText> Download all your trips, steps, journal entries, and checklists for offline use
-            </ThemedText>
-            <ThemedText style={[styles.infoText, { color: text }]}>
-              • <ThemedText style={styles.bold}>Sync Data:</ThemedText> Upload any changes made while offline when you're back online
-            </ThemedText>
-            <ThemedText style={[styles.infoText, { color: text }]}>
-              • <ThemedText style={styles.bold}>Offline Access:</ThemedText> View and edit your trips even without internet connection
-            </ThemedText>
-            <ThemedText style={[styles.infoText, { color: text }]}>
-              • <ThemedText style={styles.bold}>Automatic Sync:</ThemedText> Changes are automatically synced when you reconnect
-            </ThemedText>
+          <View style={styles.actionButtons}>
+            <GradientButton
+              title={t('buttons.prepareOfflineData')}
+              gradient="primary"
+              size="lg"
+              style={styles.actionButton}
+              onPress={handlePrepareOfflineData}
+              disabled={isPreparing}
+            />
+            <GradientButton
+              title={t('buttons.syncData')}
+              gradient="secondary"
+              size="lg"
+              style={styles.actionButton}
+              onPress={handleSyncData}
+              disabled={isSyncing}
+            />
+            <GradientButton
+              title={t('buttons.clearOfflineData')}
+              gradient="fire"
+              size="lg"
+              style={styles.actionButton}
+              onPress={handleClearOfflineData}
+            />
           </View>
-        </View>
 
-        {/* Tips */}
-        <View style={styles.tipsSection}>
-          <ThemedText type="subtitle" style={[styles.sectionTitle, { color: text }]}>
-            Tips
-          </ThemedText>
-          
-          <View style={[styles.tipCard, { backgroundColor: 'rgba(0,0,0,0.05)' }]}>
-            <ThemedText style={[styles.tipText, { color: text }]}>
-              💡 Prepare your offline data before traveling to ensure you have access to all your trip information
-            </ThemedText>
+          <View style={styles.infoCards}>
+            <GlassCard style={styles.infoCard} blurIntensity={20}>
+              <View style={styles.infoItem}>
+                <ThemedText style={styles.infoIcon}>📱</ThemedText>
+                <View style={styles.infoContent}>
+                  <ThemedText style={[styles.infoTitle, { color: theme.text }]}>
+                    Offline Access
+                  </ThemedText>
+                  <ThemedText style={[styles.infoDescription, { color: theme.textSecondary }]}>
+                    Access your trips and data even without internet connection
+                  </ThemedText>
+                </View>
+              </View>
+            </GlassCard>
+
+            <GlassCard style={styles.infoCard} blurIntensity={20}>
+              <View style={styles.infoItem}>
+                <ThemedText style={styles.infoIcon}>🔄</ThemedText>
+                <View style={styles.infoContent}>
+                  <ThemedText style={[styles.infoTitle, { color: theme.text }]}>
+                    Auto Sync
+                  </ThemedText>
+                  <ThemedText style={[styles.infoDescription, { color: theme.textSecondary }]}>
+                    Automatically sync your data when you&apos;re back online
+                  </ThemedText>
+                </View>
+              </View>
+            </GlassCard>
+
+            <GlassCard style={styles.infoCard} blurIntensity={20}>
+              <View style={styles.infoItem}>
+                <ThemedText style={styles.infoIcon}>💾</ThemedText>
+                <View style={styles.infoContent}>
+                  <ThemedText style={[styles.infoTitle, { color: theme.text }]}>
+                    Local Storage
+                  </ThemedText>
+                  <ThemedText style={[styles.infoDescription, { color: theme.textSecondary }]}>
+                    Your data is stored securely on your device
+                  </ThemedText>
+                </View>
+              </View>
+            </GlassCard>
           </View>
-          
-          <View style={[styles.tipCard, { backgroundColor: 'rgba(0,0,0,0.05)' }]}>
-            <ThemedText style={[styles.tipText, { color: text }]}>
-              🔄 Sync your data regularly to keep your information up to date across all devices
+
+          <GlassCard style={styles.tipsCard} blurIntensity={15}>
+            <ThemedText style={[styles.tipsTitle, { color: theme.text }]}>
+              💡 Tips for Offline Mode
             </ThemedText>
-          </View>
-        </View>
-      </ScrollView>
-    </ThemedView>
+            <View style={styles.tipsList}>
+              <View style={styles.tipItem}>
+                <ThemedText style={styles.tipIcon}>1️⃣</ThemedText>
+                <ThemedText style={[styles.tipText, { color: theme.textSecondary }]}>
+                  Prepare offline data before traveling to areas with poor connectivity
+                </ThemedText>
+              </View>
+              <View style={styles.tipItem}>
+                <ThemedText style={styles.tipIcon}>2️⃣</ThemedText>
+                <ThemedText style={[styles.tipText, { color: theme.textSecondary }]}>
+                  Sync your data regularly to keep everything up to date
+                </ThemedText>
+              </View>
+              <View style={styles.tipItem}>
+                <ThemedText style={styles.tipIcon}>3️⃣</ThemedText>
+                <ThemedText style={[styles.tipText, { color: theme.textSecondary }]}>
+                  Clear offline data periodically to free up storage space
+                </ThemedText>
+              </View>
+            </View>
+          </GlassCard>
+        </ScrollView>
+      </AnimatedWaves>
+    </GradientBackground>
   );
 }
 
@@ -257,71 +294,55 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-  },
-  backButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-  },
-  backButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  headerTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  headerSpacer: {
-    width: 60, // Same width as back button to center the title
-  },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
     padding: 16,
+    gap: 20,
+  },
+
+  // Header
+  headerCard: {
+    marginBottom: 8,
+  },
+  header: {
+    alignItems: 'center',
+  },
+  headerContent: {
+    alignItems: 'center',
   },
   title: {
-    textAlign: 'center',
+    fontSize: 28,
+    fontWeight: 'bold',
     marginBottom: 4,
   },
   subtitle: {
-    textAlign: 'center',
-    marginBottom: 24,
     fontSize: 16,
     opacity: 0.8,
+    textAlign: 'center',
   },
+
+  // Status Card
   statusCard: {
-    padding: 20,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
+    marginBottom: 8,
+  },
+  statusContent: {
+    alignItems: 'center',
+    paddingVertical: 8,
   },
   statusHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
+  },
+  statusIcon: {
+    fontSize: 24,
+    marginRight: 8,
   },
   statusTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-  },
-  statusIndicator: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
   },
   statusText: {
     fontSize: 16,
@@ -330,58 +351,69 @@ const styles = StyleSheet.create({
   },
   dataSize: {
     fontSize: 14,
-    opacity: 0.7,
   },
-  actionsSection: {
-    marginBottom: 32,
-  },
-  sectionTitle: {
-    marginBottom: 16,
-    fontSize: 18,
-    fontWeight: 'bold',
+
+  // Action Buttons
+  actionButtons: {
+    gap: 12,
   },
   actionButton: {
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    borderRadius: 25,
-    alignItems: 'center',
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
+    marginBottom: 0,
   },
-  actionButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  infoSection: {
-    marginBottom: 32,
+
+  // Info Cards
+  infoCards: {
+    gap: 12,
   },
   infoCard: {
-    padding: 16,
-    borderRadius: 12,
+    marginBottom: 0,
   },
-  infoText: {
+  infoItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  infoIcon: {
+    fontSize: 24,
+    marginRight: 12,
+    marginTop: 2,
+  },
+  infoContent: {
+    flex: 1,
+  },
+  infoTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  infoDescription: {
     fontSize: 14,
     lineHeight: 20,
+  },
+
+  // Tips
+  tipsCard: {
     marginBottom: 8,
   },
-  bold: {
+  tipsTitle: {
+    fontSize: 18,
     fontWeight: 'bold',
-  },
-  tipsSection: {
     marginBottom: 16,
   },
-  tipCard: {
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
+  tipsList: {
+    gap: 12,
+  },
+  tipItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  tipIcon: {
+    fontSize: 16,
+    marginRight: 12,
+    marginTop: 2,
   },
   tipText: {
     fontSize: 14,
     lineHeight: 20,
+    flex: 1,
   },
 });

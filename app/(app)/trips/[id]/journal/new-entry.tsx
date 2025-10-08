@@ -1,392 +1,375 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
+import { AnimatedWaves } from '@/components/ui/animated-waves';
+import { GlassCard } from '@/components/ui/glass-card';
+import { GradientBackground } from '@/components/ui/gradient-background';
+import { GradientButton } from '@/components/ui/gradient-button';
 import { Colors } from '@/constants/theme';
-import { getTripSteps, insertJournalEntry, insertJournalMedia, TripStepRow } from '@/contexts/db';
+import { insertJournalEntry } from '@/contexts/db';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
-import RNDateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import { useTranslation } from '@/hooks/use-translation';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { Alert, Button, Image, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useState } from 'react';
+import { Alert, Dimensions, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const { width } = Dimensions.get('window');
 
 export default function NewJournalEntryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
-  const [entryDate, setEntryDate] = useState<Date>(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [selectedStepId, setSelectedStepId] = useState<number | null>(null);
-  const [steps, setSteps] = useState<TripStepRow[]>([]);
   const [photos, setPhotos] = useState<string[]>([]);
-  const [audios, setAudios] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const border = useThemeColor({}, 'icon');
-  const text = useThemeColor({}, 'text');
+  const border = theme.icon;
+  const text = theme.text;
   const insets = useSafeAreaInsets();
-
-  useEffect(() => {
-    loadSteps();
-  }, []);
-
-  const loadSteps = async () => {
-    if (!id) return;
-    const tripSteps = await getTripSteps(Number(id));
-    setSteps(tripSteps);
-  };
+  const { t } = useTranslation();
 
   const handleSave = async () => {
     setError(null);
+    setIsSaving(true);
     
-    if (!title.trim()) {
-      setError('Title is required');
-      return;
-    }
-    
-    if (!id) {
-      setError('Trip ID is missing');
-      return;
-    }
-
     try {
-      const entryId = await insertJournalEntry({
-        tripId: Number(id),
-        stepId: selectedStepId,
+      if (!title.trim()) {
+        setError('Title is required');
+        setIsSaving(false);
+        return;
+      }
+      
+      if (!id) {
+        setError('Trip ID is missing');
+        setIsSaving(false);
+        return;
+      }
+
+      const tripId = Number(id);
+      
+      if (isNaN(tripId)) {
+        setError('Invalid Trip ID');
+        setIsSaving(false);
+        return;
+      }
+
+      await insertJournalEntry({
+        tripId,
         title: title.trim(),
         content: content.trim() || null,
-        entryDate: entryDate.getTime(),
+        entryDate: Date.now(),
+        photos: photos.length > 0 ? photos : null,
       });
 
-      // Add photos
-      for (const photoUri of photos) {
-        await insertJournalMedia({
-          journalEntryId: entryId,
-          type: 'photo',
-          uri: photoUri,
-        });
-      }
-
-      // Add audios
-      for (const audioUri of audios) {
-        await insertJournalMedia({
-          journalEntryId: entryId,
-          type: 'audio',
-          uri: audioUri,
-        });
-      }
-
-      Alert.alert('Success', 'Journal entry created successfully!', [
-        { text: 'OK', onPress: () => router.back() }
-      ]);
-    } catch (error) {
-      setError('Failed to save journal entry');
+      Alert.alert(t('common.success'), t('newEntry.entryCreated'));
+      router.back();
+    } catch (err) {
+      setError(t('newEntry.failedToCreate'));
+      Alert.alert(t('common.error'), t('newEntry.failedToCreate'));
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission required', 'Sorry, we need camera roll permissions to select photos!');
+      Alert.alert(t('common.permissionDenied'), t('newEntry.cameraPermissionRequired'));
       return;
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      quality: 0.8,
-      allowsMultipleSelection: true,
+      aspect: [16, 9],
+      quality: 1,
     });
 
-    if (!result.canceled && result.assets) {
-      const newPhotos = result.assets.map(asset => asset.uri);
-      setPhotos(prev => [...prev, ...newPhotos]);
+    if (!result.canceled) {
+      setPhotos([...photos, result.assets[0].uri]);
     }
-  };
-
-  const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission required', 'Sorry, we need camera permissions to take a photo!');
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets[0]) {
-      setPhotos(prev => [...prev, result.assets[0].uri]);
-    }
-  };
-
-  const showImagePicker = () => {
-    Alert.alert(
-      'Add Photos',
-      'Choose how you want to add photos to your journal entry',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Take Photo', onPress: takePhoto },
-        { text: 'Choose from Gallery', onPress: pickImage },
-      ]
-    );
   };
 
   const removePhoto = (index: number) => {
-    setPhotos(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const onChangeDate = (_: any, selectedDate?: Date) => {
-    const currentDate = selectedDate || entryDate;
-    setEntryDate(currentDate);
-    setShowDatePicker(false);
-  };
-
-  const showMode = (currentMode: 'date' | 'time') => {
-    if (Platform.OS === 'android') {
-      DateTimePickerAndroid.open({
-        value: entryDate,
-        onChange: onChangeDate,
-        mode: currentMode,
-        is24Hour: true,
-      });
-    } else {
-      setShowDatePicker(true);
-    }
+    setPhotos(photos.filter((_, i) => i !== index));
   };
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ThemedText type="link">← Back</ThemedText>
-        </TouchableOpacity>
-        
-        <ThemedText type="title" style={styles.title}>New Journal Entry</ThemedText>
-        {!!error && <ThemedText style={styles.error}>{error}</ThemedText>}
-        
-        {/* Title Input */}
-        <TextInput
-          style={[styles.input, { borderColor: border, color: text }]}
-          placeholder="Entry title"
-          placeholderTextColor={border}
-          value={title}
-          onChangeText={setTitle}
-        />
-        
-        {/* Content Input */}
-        <TextInput
-          style={[styles.textArea, { borderColor: border, color: text }]}
-          placeholder="Write about your day, experiences, thoughts..."
-          placeholderTextColor={border}
-          value={content}
-          onChangeText={setContent}
-          multiline
-          numberOfLines={6}
-        />
-        
-        {/* Date Selection */}
-        <View style={styles.dateSection}>
-          <ThemedText style={[styles.label, { color: text }]}>Entry Date</ThemedText>
-          <Button 
-            title={`Date: ${entryDate.toDateString()}`} 
-            onPress={() => showMode('date')} 
-          />
-        </View>
-        
-        {Platform.OS === 'ios' && showDatePicker ? (
-          <RNDateTimePicker
-            value={entryDate}
-            mode="date"
-            display="inline"
-            onChange={onChangeDate}
-          />
-        ) : null}
-        
-        {/* Step Selection */}
-        <View style={styles.stepSection}>
-          <ThemedText style={[styles.label, { color: text }]}>Related Step (Optional)</ThemedText>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.stepScrollView}>
-            <TouchableOpacity 
-              style={[styles.stepOption, { backgroundColor: selectedStepId === null ? theme.tint : theme.background, borderColor: theme.tint }]}
-              onPress={() => setSelectedStepId(null)}
-            >
-              <ThemedText style={[styles.stepOptionText, { color: selectedStepId === null ? 'white' : theme.tint }]}>
-                General
-              </ThemedText>
-            </TouchableOpacity>
-            {steps.map((step) => (
+    <GradientBackground gradient="primary" style={styles.container}>
+      <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
               <TouchableOpacity 
-                key={step.id}
-                style={[styles.stepOption, { backgroundColor: selectedStepId === step.id ? theme.tint : theme.background, borderColor: theme.tint }]}
-                onPress={() => setSelectedStepId(step.id)}
+                style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.2)' }]}
+                onPress={() => router.back()}
               >
-                <ThemedText style={[styles.stepOptionText, { color: selectedStepId === step.id ? 'white' : theme.tint }]}>
-                  {step.name}
-                </ThemedText>
+                <ThemedTextI18n 
+                  i18nKey="navigation.back" 
+                  style={[styles.backButtonText, { color: theme.text }]}
+                />
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-        
-        {/* Photos Section */}
-        <View style={styles.photosSection}>
-          <View style={styles.photosHeader}>
-            <ThemedText style={[styles.label, { color: text }]}>Photos ({photos.length})</ThemedText>
-            <TouchableOpacity style={[styles.addPhotoButton, { borderColor: theme.tint }]} onPress={showImagePicker}>
-              <ThemedText style={[styles.addPhotoText, { color: theme.tint }]}>+ Add Photos</ThemedText>
-            </TouchableOpacity>
-          </View>
-          
-          {photos.length > 0 ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photosScrollView}>
-              {photos.map((photoUri, index) => (
-                <View key={index} style={styles.photoContainer}>
-                  <Image source={{ uri: photoUri }} style={styles.photo} />
-                  <TouchableOpacity 
+              <View style={styles.headerContent}>
+                <ThemedTextI18n 
+                  i18nKey="newEntry.title" 
+                  type="title" 
+                  style={[styles.title, { color: theme.text }]}
+                />
+                <ThemedTextI18n 
+                  i18nKey="newEntry.subtitle" 
+                  style={[styles.subtitle, { color: theme.textSecondary }]}
+                />
+              </View>
+              <View style={styles.headerSpacer} />
+            </View>
+          </GlassCard>
+
+          <GlassCard style={styles.formCard} blurIntensity={25}>
+            <View style={styles.form}>
+              <View style={styles.inputContainer}>
+                <ThemedTextI18n 
+                  i18nKey="labels.entryTitle" 
+                  style={[styles.inputLabel, { color: theme.text }]}
+                />
+                <TextInput
+                  style={[styles.input, { 
+                    borderColor: border, 
+                    color: text,
+                    backgroundColor: theme.backgroundSecondary 
+                  }]}
+                  placeholder={t('placeholders.enterEntryTitle')}
+                  placeholderTextColor={theme.textTertiary}
+                  value={title}
+                  onChangeText={setTitle}
+                />
+              </View>
+
+              <View style={styles.inputContainer}>
+                <ThemedTextI18n 
+                  i18nKey="labels.content" 
+                  style={[styles.inputLabel, { color: theme.text }]}
+                />
+                <TextInput
+                  style={[styles.textArea, { 
+                    borderColor: border, 
+                    color: text,
+                    backgroundColor: theme.backgroundSecondary 
+                  }]}
+                  placeholder={t('placeholders.writeExperience')}
+                  placeholderTextColor={theme.textTertiary}
+                  multiline
+                  numberOfLines={8}
+                  value={content}
+                  onChangeText={setContent}
+                />
+              </View>
+
+              {error && (
+                <View style={styles.errorContainer}>
+                  <ThemedText style={styles.errorText}>
+                    {error}
+                  </ThemedText>
+                </View>
+              )}
+            </View>
+          </GlassCard>
+
+          <GlassCard style={styles.photosCard} blurIntensity={20}>
+            <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
+              Photos (Optional)
+            </ThemedText>
+            
+            <View style={styles.photosContainer}>
+              {photos.map((photo, index) => (
+                <View key={index} style={styles.photoItem}>
+                  <View style={styles.photoContainer}>
+                    <ThemedText style={styles.photoText}>📷</ThemedText>
+                  </View>
+                  <TouchableOpacity
                     style={styles.removePhotoButton}
                     onPress={() => removePhoto(index)}
                   >
-                    <ThemedText style={styles.removePhotoText}>×</ThemedText>
+                    <ThemedText style={[styles.removePhotoText, { color: theme.text }]}>×</ThemedText>
                   </TouchableOpacity>
                 </View>
               ))}
-            </ScrollView>
-          ) : null}
-        </View>
-        
-        {/* Audio Section (Placeholder for future implementation) */}
-        <View style={styles.audioSection}>
-          <ThemedText style={[styles.label, { color: text }]}>Audio Notes (Coming Soon)</ThemedText>
-          <View style={[styles.placeholder, { borderColor: border }]}>
-            <ThemedText style={[styles.placeholderText, { color: border }]}>
-              Audio recording feature will be available soon
-            </ThemedText>
-          </View>
-        </View>
-        
-        <View style={{ height: 16 }} />
-        <Button title="Save Entry" onPress={handleSave} />
-      </ScrollView>
-    </ThemedView>
+              
+              {photos.length < 5 && (
+                <TouchableOpacity
+                  style={[styles.addPhotoButton, { borderColor: border }]}
+                  onPress={pickImage}
+                >
+                  <ThemedText style={[styles.addPhotoText, { color: theme.textTertiary }]}>
+                    + Add Photo
+                  </ThemedText>
+                </TouchableOpacity>
+              )}
+            </View>
+          </GlassCard>
+
+          <GradientButton
+            title={isSaving ? t('newEntry.creating') : t('newEntry.create')}
+            gradient="primary"
+            size="xl"
+            style={styles.saveButton}
+            onPress={handleSave}
+            disabled={isSaving}
+          />
+        </ScrollView>
+      </AnimatedWaves>
+    </GradientBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  scrollView: { flex: 1 },
-  scrollContent: { padding: 16 },
-  backButton: { marginBottom: 12 },
-  title: { textAlign: 'center', marginBottom: 12 },
-  input: { 
-    borderWidth: 1, 
-    borderRadius: 8, 
-    paddingHorizontal: 12, 
-    paddingVertical: 8, 
-    marginBottom: 12,
+  container: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+    gap: 20,
+  },
+
+  headerCard: {
+    marginBottom: 8,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginRight: 16,
+    borderRadius: 20,
+  },
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  headerContent: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  headerSpacer: {
+    width: 60,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.8,
+  },
+
+  formCard: {
+    marginBottom: 8,
+  },
+  form: {
+    gap: 20,
+  },
+  inputContainer: {
+    gap: 8,
+  },
+  inputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     fontSize: 16,
   },
   textArea: {
     borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginBottom: 12,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     fontSize: 16,
+    height: 120,
     textAlignVertical: 'top',
   },
-  error: { color: 'red', marginBottom: 8, textAlign: 'center' },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  dateSection: {
-    marginBottom: 16,
-  },
-  stepSection: {
-    marginBottom: 16,
-  },
-  stepScrollView: {
-    flexDirection: 'row',
-  },
-  stepOption: {
+  errorContainer: {
     paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    borderWidth: 1,
-    marginRight: 8,
   },
-  stepOptionText: {
+  errorText: {
+    color: '#ef4444',
     fontSize: 14,
-    fontWeight: '500',
+    textAlign: 'center',
   },
-  photosSection: {
-    marginBottom: 16,
-  },
-  photosHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+
+  photosCard: {
     marginBottom: 8,
   },
-  addPhotoButton: {
-    borderWidth: 1,
-    borderRadius: 20,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 12,
   },
-  addPhotoText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  photosScrollView: {
+  photosContainer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  photoItem: {
+    position: 'relative',
   },
   photoContainer: {
-    position: 'relative',
-    marginRight: 8,
-  },
-  photo: {
     width: 80,
     height: 80,
-    borderRadius: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  photoText: {
+    fontSize: 24,
   },
   removePhotoButton: {
     position: 'absolute',
-    top: -5,
-    right: -5,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'red',
+    top: -8,
+    right: -8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#ef4444',
     justifyContent: 'center',
     alignItems: 'center',
   },
   removePhotoText: {
-    color: 'white',
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: 'bold',
   },
-  audioSection: {
-    marginBottom: 16,
-  },
-  placeholder: {
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 20,
-    alignItems: 'center',
+  addPhotoButton: {
+    width: 80,
+    height: 80,
+    borderRadius: 12,
+    borderWidth: 2,
     borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  placeholderText: {
+  addPhotoText: {
     fontSize: 14,
     textAlign: 'center',
+  },
+
+  saveButton: {
+    marginTop: 8,
   },
 });

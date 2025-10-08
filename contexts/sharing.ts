@@ -1,6 +1,7 @@
 import { getDb, TripCollaboratorRow, TripShareRow } from './db';
 
-// Trip Sharing functions
+export type { TripCollaboratorRow, TripShareRow };
+
 export async function createTripShare(params: {
   tripId: number;
   shareType: 'readonly' | 'collaborative';
@@ -21,7 +22,25 @@ export async function createTripShare(params: {
     return shareToken;
   } catch (error) {
     console.error('Error creating trip share:', error);
-    throw new Error(`Failed to create share link: ${error.message || 'Database error'}`);
+    throw new Error(`Failed to create share link: ${error instanceof Error ? error.message : 'Database error'}`);
+  }
+}
+
+export async function createTripShareSimple(tripId: number, shareType: 'readonly' | 'collaborative'): Promise<{ token: string }> {
+  const db = getDb();
+  const createdAt = Date.now();
+  const shareToken = generateShareToken();
+  
+  try {
+    await db.runAsync(
+      "INSERT INTO trip_shares (tripId, shareToken, shareType, permissions, expiresAt, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [tripId, shareToken, shareType, 'read', null, 1, createdAt]
+    );
+    
+    return { token: shareToken };
+  } catch (error) {
+    console.error('Error creating trip share:', error);
+    throw new Error(`Failed to create share link: ${error instanceof Error ? error.message : 'Database error'}`);
   }
 }
 
@@ -42,7 +61,6 @@ export async function deleteTripShare(shareId: number): Promise<void> {
   await db.runAsync("DELETE FROM trip_shares WHERE id = ?", [shareId]);
 }
 
-// Trip Collaboration functions
 export async function addTripCollaborator(params: {
   tripId: number;
   userId: number;
@@ -89,7 +107,6 @@ export async function getUserCollaborationRole(tripId: number, userId: number): 
   return rows[0]?.role ?? null;
 }
 
-// Debug function to check if sharing tables exist
 export async function checkSharingTables(): Promise<boolean> {
   try {
     const db = getDb();
@@ -102,7 +119,6 @@ export async function checkSharingTables(): Promise<boolean> {
   }
 }
 
-// Utility function to generate share tokens
 function generateShareToken(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';

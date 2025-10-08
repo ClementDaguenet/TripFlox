@@ -1,35 +1,61 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
+import { AnimatedWaves } from '@/components/ui/animated-waves';
+import { GlassCard } from '@/components/ui/glass-card';
+import { GradientBackground } from '@/components/ui/gradient-background';
+import { GradientButton } from '@/components/ui/gradient-button';
+import { GradientCard } from '@/components/ui/gradient-card';
 import { Colors } from '@/constants/theme';
-import { deleteJournalEntry, getJournalEntries, getTripById, getTripSteps, JournalEntryRow, TripRow, TripStepRow } from '@/contexts/db';
+import { useAuth } from '@/contexts/AuthContext';
+import { deleteJournalEntry, getJournalEntries, getTripById, getTripSteps, getUserProfile, JournalEntryRow, TripRow, TripStepRow } from '@/contexts/db';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
+import { useTranslation } from '@/hooks/use-translation';
 import { useFocusEffect } from '@react-navigation/native';
 import { Link, router, useLocalSearchParams } from 'expo-router';
-import React, { useCallback, useState } from 'react';
-import { Alert, Dimensions, FlatList, ScrollView, Share, StyleSheet, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Dimensions, FlatList, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
 
 export default function JournalScreen() {
+  const { t } = useTranslation();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [trip, setTrip] = useState<TripRow | null>(null);
   const [steps, setSteps] = useState<TripStepRow[]>([]);
   const [journalEntries, setJournalEntries] = useState<JournalEntryRow[]>([]);
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'day' | 'step'>('all');
   const [selectedStepId, setSelectedStepId] = useState<number | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const text = useThemeColor({}, 'text');
   const insets = useSafeAreaInsets();
+  const { currentUserEmail } = useAuth();
+
+  useEffect(() => {
+    const loadUserId = async () => {
+      if (currentUserEmail) {
+        const user = await getUserProfile(currentUserEmail);
+        if (user) {
+          setUserId(user.id);
+        }
+      }
+    };
+    loadUserId();
+  }, [currentUserEmail]);
+
+  useEffect(() => {
+    if (userId) {
+      loadData();
+    }
+  }, [userId, loadData]);
 
   const loadData = useCallback(async () => {
-    if (!id) return;
+    if (!id || !userId) return;
     
     try {
       const [tripData, stepsData, entriesData] = await Promise.all([
-        getTripById(Number(id)),
+        getTripById(Number(id), userId),
         getTripSteps(Number(id)),
         getJournalEntries(Number(id))
       ]);
@@ -40,7 +66,7 @@ export default function JournalScreen() {
     } catch (error) {
       console.error('Error loading journal data:', error);
     }
-  }, [id]);
+  }, [id, userId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -48,301 +74,315 @@ export default function JournalScreen() {
     }, [loadData])
   );
 
-  const formatDate = (timestamp: number) => {
-    return new Date(timestamp).toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
-
-  const formatTime = (timestamp: number) => {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const getStepName = (stepId: number | null) => {
-    if (!stepId) return 'General';
-    const step = steps.find(s => s.id === stepId);
-    return step?.name || 'Unknown Step';
-  };
-
-  const getFilteredEntries = () => {
-    switch (selectedFilter) {
-      case 'step':
-        return journalEntries.filter(entry => entry.stepId === selectedStepId);
-      case 'day':
-        // Group by day
-        const groupedByDay = journalEntries.reduce((acc, entry) => {
-          const day = new Date(entry.entryDate).toDateString();
-          if (!acc[day]) acc[day] = [];
-          acc[day].push(entry);
-          return acc;
-        }, {} as Record<string, JournalEntryRow[]>);
-        return Object.values(groupedByDay).flat();
-      default:
-        return journalEntries;
-    }
-  };
-
   const handleDeleteEntry = (entryId: number, entryTitle: string) => {
     Alert.alert(
-      'Delete Entry',
-      `Are you sure you want to delete "${entryTitle}"?`,
+      t('journal.deleteEntry'),
+      t('journal.deleteEntryConfirm', { entryTitle }),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         { 
-          text: 'Delete', 
+          text: t('common.delete'), 
           style: 'destructive', 
           onPress: async () => {
-            try {
-              await deleteJournalEntry(entryId);
-              loadData();
-            } catch (error) {
-              Alert.alert('Error', 'Failed to delete journal entry');
-            }
+            await deleteJournalEntry(entryId);
+            loadData();
           }
         }
       ]
     );
   };
 
-  const exportToPDF = async () => {
-    try {
-      // Create HTML content for PDF
-      let htmlContent = `
-        <html>
-          <head>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 20px; }
-              .header { text-align: center; margin-bottom: 30px; }
-              .entry { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
-              .entry-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
-              .entry-content { margin-bottom: 10px; line-height: 1.6; }
-              .entry-meta { font-size: 12px; color: #666; }
-            </style>
-          </head>
-          <body>
-            <div class="header">
-              <h1>${trip?.title} - Travel Journal</h1>
-              <p>Generated on ${new Date().toLocaleDateString()}</p>
-            </div>
-      `;
-
-      journalEntries.forEach(entry => {
-        htmlContent += `
-          <div class="entry">
-            <div class="entry-title">${entry.title}</div>
-            <div class="entry-content">${entry.content || ''}</div>
-            <div class="entry-meta">
-              ${formatDate(entry.entryDate)} - ${getStepName(entry.stepId)}
-            </div>
-          </div>
-        `;
-      });
-
-      htmlContent += `</body></html>`;
-
-      // For now, we'll use Share to export as text
-      // In a real implementation, you'd use a PDF library
-      const textContent = journalEntries.map(entry => 
-        `${entry.title}\n${entry.content || ''}\n${formatDate(entry.entryDate)} - ${getStepName(entry.stepId)}\n\n`
-      ).join('---\n\n');
-
-      await Share.share({
-        message: `Travel Journal - ${trip?.title}\n\n${textContent}`,
-        title: 'Travel Journal Export'
-      });
-    } catch (error) {
-      Alert.alert('Error', 'Failed to export journal');
-    }
+  const handleExportPDF = async () => {
+    Alert.alert(
+      t('journal.exportPDF'),
+      t('journal.pdfExportSoon'),
+      [{ text: t('common.ok') }]
+    );
   };
 
-  const exportPhotos = async () => {
-    try {
-      // Get all photos from journal entries
-      const allPhotos = journalEntries.flatMap(entry => 
-        entry.id ? [] : [] // We'd need to fetch media for each entry
-      );
-
-      if (allPhotos.length === 0) {
-        Alert.alert('No Photos', 'No photos found in your journal entries');
-        return;
-      }
-
-      // For now, show a placeholder message
-      Alert.alert('Export Photos', 'Photo export feature will be available soon!');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to export photos');
-    }
+  const handleExportPhotos = async () => {
+    Alert.alert(
+      t('journal.exportPhotos'),
+      t('journal.photoExportSoon'),
+      [{ text: t('common.ok') }]
+    );
   };
 
-  const renderEntry = ({ item }: { item: JournalEntryRow }) => (
-    <TouchableOpacity 
-      style={[styles.entryCard, { backgroundColor: theme.background, borderColor: theme.icon }]}
-      onPress={() => router.push({ pathname: '/(app)/trips/[id]/journal/[entryId]', params: { id: String(id), entryId: String(item.id) } })}
-    >
-      <View style={styles.entryHeader}>
-        <View style={styles.entryTitleContainer}>
-          <ThemedText style={[styles.entryTitle, { color: text }]}>{item.title}</ThemedText>
-          <ThemedText style={[styles.entryStep, { color: theme.tint }]}>
-            {getStepName(item.stepId)}
-          </ThemedText>
+  const getFilteredEntries = () => {
+    let filtered = journalEntries;
+    
+    if (selectedFilter === 'day') {
+      // Group by day and show only first entry of each day
+      const dayGroups = new Map();
+      filtered.forEach(entry => {
+        const day = new Date(entry.createdAt).toDateString();
+        if (!dayGroups.has(day)) {
+          dayGroups.set(day, entry);
+        }
+      });
+      filtered = Array.from(dayGroups.values());
+    } else if (selectedFilter === 'step' && selectedStepId) {
+      filtered = filtered.filter(entry => entry.stepId === selectedStepId);
+    }
+    
+    return filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  };
+
+  const getEntryGradient = (index: number) => {
+    const gradients = ['primary', 'secondary', 'sunset', 'ocean', 'forest', 'fire', 'night', 'aurora'];
+    return gradients[index % gradients.length] as any;
+  };
+
+  const formatDate = (dateValue: number | string) => {
+    const date = new Date(dateValue);
+    return date.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const renderJournalEntry = ({ item, index }: { item: JournalEntryRow; index: number }) => {
+    const step = steps.find(s => s.id === item.stepId);
+    
+    return (
+      <GradientCard
+        gradient={getEntryGradient(index)}
+        style={styles.entryCard}
+        shadow="md"
+        borderRadius="lg"
+        onPress={() => router.push(`/(app)/trips/${id}/journal/${item.id}`)}
+      >
+        <View style={styles.entryContent}>
+          <View style={styles.entryHeader}>
+            <View style={styles.entryInfo}>
+              <ThemedText style={[styles.entryTitle, { color: theme.text }]} numberOfLines={2}>
+                {item.title}
+              </ThemedText>
+              <ThemedText style={[styles.entryDate, { color: theme.textSecondary }]}>
+                {formatDate(item.createdAt)}
+              </ThemedText>
+              {step && (
+                <ThemedText style={[styles.entryStep, { color: theme.textSecondary }]}>
+                  📍 {step.name}
+                </ThemedText>
+              )}
+            </View>
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={() => handleDeleteEntry(item.id, item.title)}
+            >
+              <ThemedText style={[styles.deleteButtonText, { color: theme.text }]}>🗑️</ThemedText>
+            </TouchableOpacity>
+          </View>
+
+          {item.content && (
+            <ThemedText style={[styles.entryContent, { color: theme.text }]} numberOfLines={3}>
+              {item.content}
+            </ThemedText>
+          )}
+
+          <View style={styles.entryFooter}>
+            <View style={styles.entryStats}>
+              {false && (
+                <ThemedText style={styles.entryStat}>
+                  📷 0
+                </ThemedText>
+              )}
+              {false && (
+                <ThemedText style={styles.entryStat}>
+                  🎵 0
+                </ThemedText>
+              )}
+            </View>
+            <ThemedTextI18n 
+              i18nKey="journal.readMore" 
+              style={[styles.readMoreText, { color: theme.textSecondary }]}
+            />
+          </View>
         </View>
-        <TouchableOpacity 
-          style={styles.deleteButton}
-          onPress={() => handleDeleteEntry(item.id, item.title)}
-        >
-          <ThemedText style={styles.deleteIcon}>🗑️</ThemedText>
-        </TouchableOpacity>
+      </GradientCard>
+    );
+  };
+
+  const renderEmptyState = () => (
+    <GradientCard 
+      gradient="aurora" 
+      style={styles.emptyStateCard}
+      shadow="xl"
+      borderRadius="2xl"
+    >
+      <View style={styles.emptyStateContent}>
+        <ThemedText style={styles.emptyStateIcon}>📖</ThemedText>
+        <ThemedTextI18n 
+          i18nKey="journal.noEntriesYet" 
+          style={[styles.emptyStateTitle, { color: theme.text }]}
+        />
+        <ThemedTextI18n 
+          i18nKey="journal.startDocumenting" 
+          style={[styles.emptyStateSubtitle, { color: theme.textSecondary }]}
+        />
+        <Link href={`/(app)/trips/${id}/journal/new-entry`} asChild>
+          <GradientButton
+            title={t('journal.createFirstEntry')}
+            gradient="fire"
+            size="lg"
+            style={styles.emptyStateButton}
+          />
+        </Link>
       </View>
-      
-      {item.content ? (
-        <ThemedText style={[styles.entryContent, { color: text }]} numberOfLines={3}>
-          {item.content}
-        </ThemedText>
-      ) : null}
-      
-      <View style={styles.entryFooter}>
-        <ThemedText style={[styles.entryDate, { color: text }]}>
-          {formatDate(item.entryDate)}
-        </ThemedText>
-        <ThemedText style={[styles.entryTime, { color: text }]}>
-          {formatTime(item.entryDate)}
-        </ThemedText>
-      </View>
-    </TouchableOpacity>
+    </GradientCard>
   );
 
   if (!trip) {
     return (
-      <ThemedView style={styles.container}>
-        <ThemedText>Loading...</ThemedText>
-      </ThemedView>
+      <GradientBackground gradient="primary" style={styles.container}>
+        <AnimatedWaves intensity="medium">
+          <View style={styles.loadingContainer}>
+            <ThemedTextI18n 
+              i18nKey="journal.loading" 
+              style={[styles.loadingText, { color: theme.text }]}
+            />
+          </View>
+        </AnimatedWaves>
+      </GradientBackground>
     );
   }
 
-  const filteredEntries = getFilteredEntries();
-
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <ThemedText type="title" style={[styles.title, { color: text }]}>
-            Travel Journal
-          </ThemedText>
-          <ThemedText style={[styles.subtitle, { color: text }]}>
-            {trip.title}
-          </ThemedText>
-        </View>
-
-        {/* Filter Buttons */}
-        <View style={styles.filterContainer}>
-          <TouchableOpacity 
-            style={[styles.filterButton, { backgroundColor: selectedFilter === 'all' ? theme.tint : theme.background, borderColor: theme.tint }]}
-            onPress={() => setSelectedFilter('all')}
-          >
-            <ThemedText style={[styles.filterButtonText, { color: selectedFilter === 'all' ? 'white' : theme.tint }]}>
-              All Entries
-            </ThemedText>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.filterButton, { backgroundColor: selectedFilter === 'day' ? theme.tint : theme.background, borderColor: theme.tint }]}
-            onPress={() => setSelectedFilter('day')}
-          >
-            <ThemedText style={[styles.filterButtonText, { color: selectedFilter === 'day' ? 'white' : theme.tint }]}>
-              By Day
-            </ThemedText>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.filterButton, { backgroundColor: selectedFilter === 'step' ? theme.tint : theme.background, borderColor: theme.tint }]}
-            onPress={() => setSelectedFilter('step')}
-          >
-            <ThemedText style={[styles.filterButtonText, { color: selectedFilter === 'step' ? 'white' : theme.tint }]}>
-              By Step
-            </ThemedText>
-          </TouchableOpacity>
-        </View>
-
-        {/* Step Selector (when step filter is active) */}
-        {selectedFilter === 'step' ? (
-          <View style={styles.stepSelector}>
-            <ThemedText style={[styles.stepSelectorLabel, { color: text }]}>Select Step:</ThemedText>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.stepScrollView}>
-              <TouchableOpacity 
-                style={[styles.stepOption, { backgroundColor: selectedStepId === null ? theme.tint : theme.background, borderColor: theme.tint }]}
-                onPress={() => setSelectedStepId(null)}
-              >
-                <ThemedText style={[styles.stepOptionText, { color: selectedStepId === null ? 'white' : theme.tint }]}>
-                  General
+    <GradientBackground gradient="primary" style={styles.container}>
+      <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
+              <View style={styles.headerContent}>
+                <ThemedTextI18n 
+                  i18nKey="journal.title" 
+                  type="title" 
+                  style={[styles.title, { color: theme.text }]}
+                />
+                <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
+                  {trip.title}
                 </ThemedText>
+                <ThemedText style={[styles.entryCount, { color: theme.textSecondary }]}>
+                  {t('journal.entryCount', { count: journalEntries.length, plural: journalEntries.length !== 1 ? 'ies' : 'y' })}
+                </ThemedText>
+              </View>
+            </View>
+          </GlassCard>
+
+          <GlassCard style={styles.filterCard} blurIntensity={25}>
+            <View style={styles.filterButtons}>
+              <TouchableOpacity
+                style={[styles.filterButton, selectedFilter === 'all' && styles.filterButtonActive]}
+                onPress={() => setSelectedFilter('all')}
+              >
+                <ThemedTextI18n 
+                  i18nKey="journal.all" 
+                  style={[styles.filterButtonText, { color: selectedFilter === 'all' ? theme.text : theme.textSecondary }]}
+                />
               </TouchableOpacity>
-              {steps.map((step) => (
-                <TouchableOpacity 
-                  key={step.id}
-                  style={[styles.stepOption, { backgroundColor: selectedStepId === step.id ? theme.tint : theme.background, borderColor: theme.tint }]}
-                  onPress={() => setSelectedStepId(step.id)}
-                >
-                  <ThemedText style={[styles.stepOptionText, { color: selectedStepId === step.id ? 'white' : theme.tint }]}>
-                    {step.name}
-                  </ThemedText>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        ) : null}
+              <TouchableOpacity
+                style={[styles.filterButton, selectedFilter === 'day' && styles.filterButtonActive]}
+                onPress={() => setSelectedFilter('day')}
+              >
+                <ThemedTextI18n 
+                  i18nKey="journal.byDay" 
+                  style={[styles.filterButtonText, { color: selectedFilter === 'day' ? theme.text : theme.textSecondary }]}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.filterButton, selectedFilter === 'step' && styles.filterButtonActive]}
+                onPress={() => setSelectedFilter('step')}
+              >
+                <ThemedTextI18n 
+                  i18nKey="journal.byStep" 
+                  style={[styles.filterButtonText, { color: selectedFilter === 'step' ? theme.text : theme.textSecondary }]}
+                />
+              </TouchableOpacity>
+            </View>
+          </GlassCard>
 
-        {/* Action Buttons */}
-        <View style={styles.actionButtons}>
-          <Link href={{ pathname: '/(app)/trips/[id]/journal/new-entry', params: { id: String(id) } }} asChild>
-            <TouchableOpacity style={[styles.actionButton, { backgroundColor: theme.tint }]}>
-              <ThemedText style={styles.actionButtonText}>+ New Entry</ThemedText>
-            </TouchableOpacity>
-          </Link>
-          
-          <TouchableOpacity 
-            style={[styles.actionButton, { backgroundColor: '#ff8c00' }]}
-            onPress={exportToPDF}
-          >
-            <ThemedText style={styles.actionButtonText}>📄 Export PDF</ThemedText>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.actionButton, { backgroundColor: '#4CAF50' }]}
-            onPress={exportPhotos}
-          >
-            <ThemedText style={styles.actionButtonText}>📸 Export Photos</ThemedText>
-          </TouchableOpacity>
-        </View>
+          {selectedFilter === 'step' && (
+            <GlassCard style={styles.stepFilterCard} blurIntensity={20}>
+              <ThemedTextI18n 
+                i18nKey="journal.selectStep" 
+                style={[styles.stepFilterTitle, { color: theme.text }]}
+              />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={styles.stepFilterButtons}>
+                  <TouchableOpacity
+                    style={[styles.stepFilterButton, selectedStepId === null && styles.stepFilterButtonActive]}
+                    onPress={() => setSelectedStepId(null)}
+                  >
+                    <ThemedTextI18n 
+                      i18nKey="journal.allSteps" 
+                      style={[styles.stepFilterButtonText, selectedStepId === null && styles.stepFilterButtonTextActive]}
+                    />
+                  </TouchableOpacity>
+                  {steps.map(step => (
+                    <TouchableOpacity
+                      key={step.id}
+                      style={[styles.stepFilterButton, selectedStepId === step.id && styles.stepFilterButtonActive]}
+                      onPress={() => setSelectedStepId(step.id)}
+                    >
+                      <ThemedText style={[styles.stepFilterButtonText, selectedStepId === step.id && styles.stepFilterButtonTextActive]}>
+                        {step.name}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            </GlassCard>
+          )}
 
-        {/* Entries List */}
-        {filteredEntries.length === 0 ? (
-          <View style={styles.emptyState}>
-            <ThemedText style={styles.emptyIcon}>📖</ThemedText>
-            <ThemedText type="subtitle" style={[styles.emptyTitle, { color: text }]}>
-              No journal entries yet
-            </ThemedText>
-            <ThemedText style={[styles.emptyText, { color: text }]}>
-              Start documenting your travel memories by creating your first journal entry!
-            </ThemedText>
+          <View style={styles.actionButtons}>
+            <Link href={`/(app)/trips/${id}/journal/new-entry`} asChild>
+              <GradientButton
+                title={t('journal.newEntry')}
+                gradient="primary"
+                size="md"
+                style={styles.actionButton}
+              />
+            </Link>
+            <GradientButton
+              title={t('journal.exportPDF')}
+              gradient="secondary"
+              size="md"
+              style={styles.actionButton}
+              onPress={handleExportPDF}
+            />
+            <GradientButton
+              title={t('journal.exportPhotos')}
+              gradient="ocean"
+              size="md"
+              style={styles.actionButton}
+              onPress={handleExportPhotos}
+            />
           </View>
-        ) : (
-          <FlatList
-            data={filteredEntries}
-            keyExtractor={(item) => String(item.id)}
-            renderItem={renderEntry}
-            scrollEnabled={false}
-            contentContainerStyle={styles.entriesList}
-          />
-        )}
-      </ScrollView>
-    </ThemedView>
+
+          {getFilteredEntries().length > 0 ? (
+            <FlatList
+              data={getFilteredEntries()}
+              renderItem={renderJournalEntry}
+              keyExtractor={(item) => item.id.toString()}
+              scrollEnabled={false}
+              ItemSeparatorComponent={() => <View style={styles.entrySeparator} />}
+            />
+          ) : (
+            <View style={styles.emptyContainer}>
+              {renderEmptyState()}
+            </View>
+          )}
+        </ScrollView>
+      </AnimatedWaves>
+    </GradientBackground>
   );
 }
 
@@ -352,118 +392,140 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
+  },
+  scrollContent: {
     padding: 16,
+    gap: 16,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 18,
+  },
+
+  // Header
+  headerCard: {
+    marginBottom: 8,
   },
   header: {
-    marginBottom: 24,
+    alignItems: 'center',
+  },
+  headerContent: {
+    alignItems: 'center',
   },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   subtitle: {
     fontSize: 16,
+    opacity: 0.8,
+    marginBottom: 4,
+  },
+  entryCount: {
+    fontSize: 14,
     opacity: 0.7,
   },
-  filterContainer: {
+
+  // Filters
+  filterCard: {
+    marginBottom: 8,
+  },
+  filterButtons: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 16,
   },
   filterButton: {
     flex: 1,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: 20,
-    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.1)',
     alignItems: 'center',
+  },
+  filterButtonActive: {
+    backgroundColor: 'rgba(255,255,255,0.3)',
   },
   filterButtonText: {
     fontSize: 14,
     fontWeight: '600',
   },
-  stepSelector: {
-    marginBottom: 16,
+  filterButtonTextActive: {
+    // Color will be applied dynamically
   },
-  stepSelectorLabel: {
-    fontSize: 16,
-    fontWeight: '600',
+
+  stepFilterCard: {
     marginBottom: 8,
   },
-  stepScrollView: {
-    flexDirection: 'row',
+  stepFilterTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
   },
-  stepOption: {
+  stepFilterButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  stepFilterButton: {
     paddingVertical: 8,
     paddingHorizontal: 16,
-    borderRadius: 20,
-    borderWidth: 1,
-    marginRight: 8,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
   },
-  stepOptionText: {
-    fontSize: 14,
-    fontWeight: '500',
+  stepFilterButtonActive: {
+    backgroundColor: 'rgba(255,255,255,0.3)',
+  },
+  stepFilterButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  stepFilterButtonTextActive: {
+    // Color will be applied dynamically
   },
   actionButtons: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 24,
+    flexWrap: 'wrap',
+    gap: 12,
   },
   actionButton: {
     flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  actionButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  entriesList: {
-    paddingBottom: 24,
+    minWidth: (width - 44) / 3,
   },
   entryCard: {
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    marginBottom: 0,
   },
   entryHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 8,
+    marginBottom: 12,
   },
-  entryTitleContainer: {
+  entryInfo: {
     flex: 1,
+    marginRight: 12,
   },
   entryTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 4,
   },
+  entryDate: {
+    fontSize: 12,
+    marginBottom: 2,
+  },
   entryStep: {
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 12,
   },
   deleteButton: {
-    padding: 4,
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  deleteIcon: {
+  deleteButtonText: {
     fontSize: 16,
   },
   entryContent: {
@@ -476,33 +538,52 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  entryDate: {
-    fontSize: 12,
-    fontWeight: '500',
+  entryStats: {
+    flexDirection: 'row',
+    gap: 12,
   },
-  entryTime: {
+  entryStat: {
     fontSize: 12,
-    opacity: 0.7,
   },
-  emptyState: {
+  readMoreText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  entrySeparator: {
+    height: 12,
+  },
+
+  // Empty State
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  emptyStateCard: {
+    marginHorizontal: 16,
+  },
+  emptyStateContent: {
     alignItems: 'center',
-    paddingVertical: 60,
+    justifyContent: 'center',
+    paddingVertical: 40,
   },
-  emptyIcon: {
+  emptyStateIcon: {
     fontSize: 64,
-    marginBottom: 20,
+    marginBottom: 16,
   },
-  emptyTitle: {
+  emptyStateTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 12,
+    marginBottom: 8,
     textAlign: 'center',
   },
-  emptyText: {
+  emptyStateSubtitle: {
     fontSize: 16,
-    opacity: 0.7,
     textAlign: 'center',
-    lineHeight: 24,
-    paddingHorizontal: 40,
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  emptyStateButton: {
+    minWidth: 200,
   },
 });

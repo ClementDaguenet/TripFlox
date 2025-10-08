@@ -43,7 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     const user = await findUserByEmail(email);
-    const isValid = !!user && user.password === password;
+    const isValid = !!user && user.password_hash === password;
     if (!isValid) {
       await SecureStore.deleteItemAsync("userToken");
       await SecureStore.deleteItemAsync("userEmail");

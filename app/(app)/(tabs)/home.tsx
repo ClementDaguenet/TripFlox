@@ -1,29 +1,43 @@
 import { ThemedText } from "@/components/themed-text";
-import { ThemedView } from "@/components/themed-view";
+import { ThemedTextI18n } from "@/components/themed-text-i18n";
+import { AnimatedNumber } from "@/components/ui/animated-number";
+import { AnimatedWaves } from "@/components/ui/animated-waves";
+import { GlassCard } from "@/components/ui/glass-card";
+import { GradientBackground } from "@/components/ui/gradient-background";
+import { GradientButton } from "@/components/ui/gradient-button";
+import { GradientCard } from "@/components/ui/gradient-card";
 import { Colors } from "@/constants/theme";
 import { useAuth } from "@/contexts/AuthContext";
 import { getAllTrips, getUserProfile, UserRow } from "@/contexts/db";
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { useTranslation } from "@/hooks/use-translation";
+import { getLocationDisplay } from "@/services/location-utils";
 import { useFocusEffect } from "@react-navigation/native";
 import { Link } from "expo-router";
 import React, { useCallback, useState } from "react";
 import {
   Dimensions,
+  Image,
   ScrollView,
   StyleSheet,
-  TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
 
+// Cache pour les noms de villes pour éviter les appels API répétés
+const cityCache = new Map<string, string>();
+
 export default function HomeScreen() {
   const { currentUserEmail } = useAuth();
+  const { t } = useTranslation();
   const [userProfile, setUserProfile] = useState<UserRow | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
   const [tripsCount, setTripsCount] = useState(0);
   const [locationsCount, setLocationsCount] = useState(0);
   const [daysTraveling, setDaysTraveling] = useState(0);
+  const [isLoadingStats, setIsLoadingStats] = useState(true);
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? "light"];
   const insets = useSafeAreaInsets();
@@ -32,15 +46,56 @@ export default function HomeScreen() {
     if (!currentUserEmail) return;
     const profile = await getUserProfile(currentUserEmail);
     setUserProfile(profile);
+    if (profile) {
+      setUserId(profile.id);
+    }
   }, [currentUserEmail]);
 
   const loadStats = useCallback(async () => {
     try {
-      const trips = await getAllTrips();
+      if (!userId) return;
+      
+      setIsLoadingStats(true);
+      const trips = await getAllTrips(userId);
       setTripsCount(trips.length);
 
-      const tripsWithLocation = trips.filter((trip) => trip.lat && trip.lng);
-      setLocationsCount(tripsWithLocation.length);
+      // Compter les villes uniques en utilisant les noms de villes réels
+      const uniqueCities = new Set<string>();
+      
+      // Traiter les trips avec géocodage asynchrone et cache
+      const locationPromises = trips
+        .filter((trip) => trip.lat && trip.lng)
+        .map(async (trip) => {
+          const cacheKey = `${trip.lat},${trip.lng}`;
+          
+          // Vérifier le cache d'abord
+          if (cityCache.has(cacheKey)) {
+            return cityCache.get(cacheKey);
+          }
+          
+          try {
+            // Utiliser getLocationDisplay qui a une meilleure gestion d'erreur
+            const locationName = await getLocationDisplay(trip.lat!, trip.lng!);
+            if (locationName && locationName !== 'No location') {
+              // Extraire la ville du nom de lieu si possible
+              const city = locationName.split(',')[0].trim();
+              cityCache.set(cacheKey, city);
+              return city;
+            }
+          } catch (error) {
+            console.error('Error geocoding trip location:', error);
+          }
+          return null;
+        });
+
+      const cities = await Promise.all(locationPromises);
+      cities.forEach((city) => {
+        if (city) {
+          uniqueCities.add(city);
+        }
+      });
+      
+      setLocationsCount(uniqueCities.size);
 
       let totalDays = 0;
       trips.forEach((trip) => {
@@ -55,271 +110,283 @@ export default function HomeScreen() {
       setDaysTraveling(totalDays);
     } catch (error) {
       console.error("Error loading stats:", error);
+    } finally {
+      setIsLoadingStats(false);
     }
-  }, []);
+  }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
       loadUserProfile();
-      loadStats();
-    }, [loadUserProfile, loadStats])
+    }, [loadUserProfile])
   );
 
-  const features = [
-    {
-      icon: "🗺️",
-      title: "Plan Your Trips",
-      description: "Create and organize your travel adventures with ease",
-      color: theme.tint,
-      gradient: [theme.tint, theme.tint + "80"],
-    },
-    {
-      icon: "📍",
-      title: "Location Tracking",
-      description: "Mark and discover amazing places around the world",
-      color: "#ff8c00",
-      gradient: ["#ff8c00", "#ffb84d"],
-    },
-    {
-      icon: "📅",
-      title: "Date Management",
-      description: "Keep track of your travel dates and schedules",
-      color: "#4CAF50",
-      gradient: ["#4CAF50", "#66BB6A"],
-    },
-    {
-      icon: "👤",
-      title: "Personal Profile",
-      description: "Manage your travel preferences and personal info",
-      color: "#2196F3",
-      gradient: ["#2196F3", "#42A5F5"],
-    },
-  ];
-
-  const quickActions = [
-    {
-      title: "New Trip",
-      icon: "✈️",
-      href: "/(app)/trips/new" as const,
-      color: theme.tint,
-      textColor: "white",
-    },
-    {
-      title: "My Trips",
-      icon: "🗺️",
-      href: "/(app)/(tabs)/trips" as const,
-      color: "#ff8c00",
-      textColor: "white",
-    },
-    {
-      title: "Profile",
-      icon: "👤",
-      href: "/(app)/(tabs)/profile" as const,
-      color: "#4CAF50",
-      textColor: "white",
-    },
-  ];
+  // Charger les stats quand userId change
+  useFocusEffect(
+    useCallback(() => {
+      if (userId) {
+        loadStats();
+      }
+    }, [userId, loadStats])
+  );
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top + 20 }]}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 20 }}
-      >
-        {/* Hero Section */}
-        <View style={[styles.heroSection, { backgroundColor: theme.tint }]}>
-          <View style={styles.heroContent}>
-            <View style={styles.heroTextContainer}>
-              <ThemedText style={styles.heroGreeting}>
-                Welcome back, {userProfile?.firstName || "Traveler"}! 👋
-              </ThemedText>
-              <ThemedText style={styles.heroTitle}>Wox Tripflox</ThemedText>
-              <ThemedText style={styles.heroSubtitle}>
-                Your ultimate travel companion for planning amazing adventures
-              </ThemedText>
-            </View>
-            <View style={styles.heroDecoration}>
-              <ThemedText style={styles.heroEmoji}>✈️</ThemedText>
-            </View>
-          </View>
-        </View>
-
-        {/* Quick Actions - New Design */}
-        <View style={styles.quickActionsSection}>
-          <ThemedText
-            type="subtitle"
-            style={[styles.sectionTitle, { color: theme.text }]}
-          >
-            Quick Actions
-          </ThemedText>
-          <View style={styles.quickActionsContainer}>
-            {quickActions.map((action, index) => (
-              <Link key={index} href={action.href} asChild>
-                <TouchableOpacity
-                  style={[
-                    styles.quickActionCard,
-                    { backgroundColor: action.color },
-                  ]}
-                >
-                  <View style={styles.quickActionIconWrapper}>
-                    <ThemedText style={styles.quickActionIcon}>
-                      {action.icon}
-                    </ThemedText>
-                  </View>
-                  <ThemedText
-                    style={[
-                      styles.quickActionText,
-                      { color: action.textColor },
-                    ]}
-                  >
-                    {action.title}
-                  </ThemedText>
-                </TouchableOpacity>
-              </Link>
-            ))}
-          </View>
-        </View>
-
-        {/* Stats Cards - New Grid Layout */}
-        <View style={styles.statsSection}>
-          <ThemedText
-            type="subtitle"
-            style={[styles.sectionTitle, { color: theme.text }]}
-          >
-            Your Journey
-          </ThemedText>
-          <View style={styles.statsGrid}>
-            <View
-              style={[
-                styles.statCard,
-                { backgroundColor: theme.background, borderColor: theme.tint },
-              ]}
-            >
-              <ThemedText style={[styles.statNumber, { color: theme.tint }]}>
-                {tripsCount}
-              </ThemedText>
-              <ThemedText style={[styles.statLabel, { color: theme.text }]}>
-                Trips
-              </ThemedText>
-            </View>
-            <View
-              style={[
-                styles.statCard,
-                { backgroundColor: theme.background, borderColor: "#ff8c00" },
-              ]}
-            >
-              <ThemedText style={[styles.statNumber, { color: "#ff8c00" }]}>
-                {locationsCount}
-              </ThemedText>
-              <ThemedText style={[styles.statLabel, { color: theme.text }]}>
-                Locations
-              </ThemedText>
-            </View>
-            <View
-              style={[
-                styles.statCard,
-                { backgroundColor: theme.background, borderColor: "#4CAF50" },
-              ]}
-            >
-              <ThemedText style={[styles.statNumber, { color: "#4CAF50" }]}>
-                {daysTraveling}
-              </ThemedText>
-              <ThemedText style={[styles.statLabel, { color: theme.text }]}>
-                Days
-              </ThemedText>
-            </View>
-          </View>
-        </View>
-
-        {/* Features - New Card Layout */}
-        <View style={styles.featuresSection}>
-          <ThemedText
-            type="subtitle"
-            style={[styles.sectionTitle, { color: theme.text }]}
-          >
-            Why Choose Wox Tripflox?
-          </ThemedText>
-          <View style={styles.featuresContainer}>
-            {features.map((feature, index) => (
-              <View
-                key={index}
-                style={[
-                  styles.featureCard,
-                  {
-                    backgroundColor: theme.background,
-                    borderColor: theme.icon,
-                  },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.featureIconContainer,
-                    { backgroundColor: feature.color + "20" },
-                  ]}
-                >
-                  <ThemedText style={styles.featureIcon}>
-                    {feature.icon}
-                  </ThemedText>
-                </View>
-                <View style={styles.featureContent}>
-                  <ThemedText
-                    type="defaultSemiBold"
-                    style={[styles.featureTitle, { color: theme.text }]}
-                  >
-                    {feature.title}
-                  </ThemedText>
-                  <ThemedText
-                    style={[styles.featureDescription, { color: theme.text }]}
-                  >
-                    {feature.description}
-                  </ThemedText>
-                </View>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* Call to Action - New Design */}
-        <View style={styles.ctaSection}>
-          <View
-            style={[
-              styles.ctaCard,
-              { backgroundColor: theme.tint + "15", borderColor: theme.tint },
-            ]}
-          >
-            <View style={styles.ctaIconContainer}>
-              <ThemedText style={styles.ctaIcon}>🚀</ThemedText>
-            </View>
-            <View style={styles.ctaTextContainer}>
-              <ThemedText style={[styles.ctaTitle, { color: theme.text }]}>
-                Ready to Start Your Journey?
-              </ThemedText>
-              <ThemedText
-                style={[styles.ctaDescription, { color: theme.text }]}
-              >
-                Create your first trip and begin planning your next adventure!
-              </ThemedText>
-            </View>
-            <Link href="/(app)/trips/new" asChild>
-              <TouchableOpacity
-                style={[styles.ctaButton, { backgroundColor: theme.tint }]}
-              >
-                <ThemedText style={styles.ctaButtonText}>
-                  Get Started
+    <GradientBackground gradient="primary" style={styles.container}>
+      <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: Math.max(insets.bottom, 16) },
+          ]}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={[styles.topAvatarContainer, { top: insets.top + 10 }]}>
+            {userProfile?.avatar ? (
+              <Image source={{ uri: userProfile.avatar }} style={styles.topAvatar} />
+            ) : (
+              <View style={[styles.topAvatar, { backgroundColor: theme.tint }]}>
+                <ThemedText style={[styles.topAvatarText, { color: theme.text }]}>
+                  {(userProfile?.firstName || "T").charAt(0).toUpperCase()}
                 </ThemedText>
-              </TouchableOpacity>
-            </Link>
+              </View>
+            )}
           </View>
-        </View>
 
-        {/* Footer */}
-        <View style={styles.footer}>
-          <ThemedText style={[styles.footerText, { color: theme.text }]}>
-            Made with ❤️ for travelers around the world
-          </ThemedText>
-        </View>
-      </ScrollView>
-    </ThemedView>
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
+              <View style={styles.headerContent}>
+                <ThemedTextI18n 
+                  i18nKey="home.welcome" 
+                  type="title" 
+                  style={[styles.title, { color: theme.text }]}
+                />
+                <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
+                  {userProfile?.firstName || t('home.traveler')}
+                </ThemedText>
+              </View>
+            </View>
+          </GlassCard>
+          <View style={styles.statsContainer}>
+            <GradientCard 
+              gradient="sunset" 
+              style={styles.statCard}
+              shadow="lg"
+              borderRadius="xl"
+            >
+              <View style={styles.statContent}>
+                {isLoadingStats ? (
+                  <ThemedText style={[styles.statNumber, { color: theme.text }]}>
+                    ...
+                  </ThemedText>
+                ) : (
+                  <AnimatedNumber
+                    value={tripsCount}
+                    style={styles.statNumber}
+                    color={theme.text}
+                    fontSize={28}
+                    fontWeight="bold"
+                  />
+                )}
+                <ThemedTextI18n 
+                  i18nKey="home.trips" 
+                  style={[styles.statLabel, { color: theme.textSecondary }]}
+                />
+                <ThemedText style={styles.statIcon}>✈️</ThemedText>
+              </View>
+            </GradientCard>
+
+            <GradientCard 
+              gradient="ocean" 
+              style={styles.statCard}
+              shadow="lg"
+              borderRadius="xl"
+            >
+              <View style={styles.statContent}>
+                {isLoadingStats ? (
+                  <ThemedText style={[styles.statNumber, { color: theme.text }]}>
+                    ...
+                  </ThemedText>
+                ) : (
+                  <AnimatedNumber
+                    value={locationsCount}
+                    style={styles.statNumber}
+                    color={theme.text}
+                    fontSize={28}
+                    fontWeight="bold"
+                  />
+                )}
+                <ThemedTextI18n 
+                  i18nKey="home.locations" 
+                  style={[styles.statLabel, { color: theme.textSecondary }]}
+                />
+                <ThemedText style={styles.statIcon}>📍</ThemedText>
+              </View>
+            </GradientCard>
+
+            <GradientCard 
+              gradient="forest" 
+              style={styles.statCard}
+              shadow="lg"
+              borderRadius="xl"
+            >
+              <View style={styles.statContent}>
+                {isLoadingStats ? (
+                  <ThemedText style={[styles.statNumber, { color: theme.text }]}>
+                    ...
+                  </ThemedText>
+                ) : (
+                  <AnimatedNumber
+                    value={daysTraveling}
+                    style={styles.statNumber}
+                    color={theme.text}
+                    fontSize={28}
+                    fontWeight="bold"
+                  />
+                )}
+                <ThemedTextI18n 
+                  i18nKey="home.days" 
+                  style={[styles.statLabel, { color: theme.textSecondary }]}
+                />
+                <ThemedText style={styles.statIcon}>📅</ThemedText>
+              </View>
+            </GradientCard>
+          </View>
+
+          <GlassCard style={styles.actionsCard} blurIntensity={25}>
+            <ThemedTextI18n 
+              i18nKey="sections.quickActions" 
+              style={[styles.sectionTitle, { color: theme.text }]}
+            />
+
+            <View style={styles.actionsGrid}>
+              <Link href="/(app)/trips/new" asChild>
+                <GradientButton
+                  title={t('buttons.newTrip')}
+                  gradient="primary"
+                  size="lg"
+                  style={styles.actionButton}
+                />
+              </Link>
+              <Link href="/(app)/(tabs)/trips" asChild>
+                <GradientButton
+                  title={t('home.viewTrips')}
+                  gradient="ocean"
+                  size="lg"
+                  style={styles.actionButton}
+                />
+              </Link>
+            </View>
+          </GlassCard>
+
+          {!isLoadingStats && tripsCount > 0 && (
+            <GlassCard style={styles.recentTripsCard} blurIntensity={20}>
+              <ThemedTextI18n 
+                i18nKey="home.recentTrips" 
+                style={[styles.sectionTitle, { color: theme.text }]}
+              />
+              <ThemedText style={[styles.sectionSubtitle, { color: theme.textSecondary }]}>
+                {t('home.youHaveTrips', { count: tripsCount, plural: tripsCount !== 1 ? 's' : '' })}
+              </ThemedText>
+            </GlassCard>
+          )}
+
+          {!isLoadingStats && tripsCount === 0 && (
+            <GradientCard 
+              gradient="aurora" 
+              style={styles.emptyStateCard}
+              shadow="xl"
+              borderRadius="2xl"
+            >
+              <View style={styles.emptyStateContent}>
+                <ThemedText style={styles.emptyStateIcon}>🌍</ThemedText>
+        <ThemedTextI18n 
+          i18nKey="empty.startJourney" 
+          style={[styles.emptyStateTitle, { color: theme.text }]}
+        />
+                <ThemedTextI18n 
+                  i18nKey="empty.createFirstTripMessage" 
+                  style={[styles.emptyStateSubtitle, { color: theme.textSecondary }]}
+                />
+                <Link href="/(app)/trips/new" asChild>
+                  <GradientButton
+                    title={t('buttons.createFirstTrip')}
+                    gradient="sunset"
+                    size="xl"
+                    style={styles.emptyStateButton}
+                  />
+                </Link>
+              </View>
+            </GradientCard>
+          )}
+
+          <GlassCard style={styles.featuresCard} blurIntensity={15}>
+            <ThemedTextI18n 
+              i18nKey="home.whyChoose" 
+              style={[styles.sectionTitle, { color: theme.text }]}
+            />
+            
+            <View style={styles.featuresGrid}>
+              <View style={styles.featureItem}>
+                <View style={styles.featureIconContainer}>
+                  <ThemedText style={styles.featureIcon}>🗺️</ThemedText>
+                </View>
+                <ThemedTextI18n 
+                  i18nKey="home.whyChoose1" 
+                  style={[styles.featureTitle, { color: theme.text }]}
+                />
+                <ThemedTextI18n 
+                  i18nKey="home.whyChoose1Desc" 
+                  style={[styles.featureDescription, { color: theme.textSecondary }]}
+                />
+              </View>
+
+              <View style={styles.featureItem}>
+                <View style={styles.featureIconContainer}>
+                  <ThemedText style={styles.featureIcon}>📍</ThemedText>
+                </View>
+                <ThemedTextI18n 
+                  i18nKey="home.whyChoose2" 
+                  style={[styles.featureTitle, { color: theme.text }]}
+                />
+                <ThemedTextI18n 
+                  i18nKey="home.whyChoose2Desc" 
+                  style={[styles.featureDescription, { color: theme.textSecondary }]}
+                />
+              </View>
+
+              <View style={styles.featureItem}>
+                <View style={styles.featureIconContainer}>
+                  <ThemedText style={styles.featureIcon}>📅</ThemedText>
+                </View>
+                <ThemedTextI18n 
+                  i18nKey="home.whyChoose3" 
+                  style={[styles.featureTitle, { color: theme.text }]}
+                />
+                <ThemedTextI18n 
+                  i18nKey="home.whyChoose3Desc" 
+                  style={[styles.featureDescription, { color: theme.textSecondary }]}
+                />
+              </View>
+
+              <View style={styles.featureItem}>
+                <View style={styles.featureIconContainer}>
+                  <ThemedText style={styles.featureIcon}>👤</ThemedText>
+                </View>
+                <ThemedTextI18n 
+                  i18nKey="home.whyChoose4" 
+                  style={[styles.featureTitle, { color: theme.text }]}
+                />
+                <ThemedTextI18n 
+                  i18nKey="home.whyChoose4Desc" 
+                  style={[styles.featureDescription, { color: theme.textSecondary }]}
+                />
+              </View>
+            </View>
+          </GlassCard>
+        </ScrollView>
+      </AnimatedWaves>
+    </GradientBackground>
   );
 }
 
@@ -327,263 +394,177 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-
-  // Hero Section
-  heroSection: {
-    paddingHorizontal: 24,
-    paddingTop: 30,
-    paddingBottom: 50,
-    marginBottom: 24,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
-  },
-  heroContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  heroTextContainer: {
+  scrollView: {
     flex: 1,
-    paddingRight: 16,
   },
-  heroGreeting: {
-    fontSize: 16,
-    color: "white",
-    opacity: 0.9,
+  scrollContent: {
+    padding: 16,
+    gap: 20,
+  },
+  
+  // Header
+  headerCard: {
     marginBottom: 8,
-    fontWeight: "500",
   },
-  heroTitle: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: "white",
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  heroSubtitle: {
-    fontSize: 16,
-    color: "white",
-    opacity: 0.9,
-    lineHeight: 24,
-  },
-  heroDecoration: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: "rgba(255,255,255,0.3)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  heroEmoji: {
-    fontSize: 50,
-  },
-
-  // Quick Actions
-  quickActionsSection: {
-    paddingHorizontal: 24,
-    marginBottom: 32,
-  },
-  sectionTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-    marginBottom: 20,
-  },
-  quickActionsContainer: {
-    flexDirection: "row",
-    gap: 16,
-  },
-  quickActionCard: {
+  headerContent: {
     flex: 1,
-    padding: 20,
-    borderRadius: 16,
-    alignItems: "center",
-    minHeight: 120,
-    justifyContent: "center",
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.15,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.8,
+  },
+  topAvatarContainer: {
+    position: 'absolute',
+    right: 20,
+    zIndex: 1000,
+  },
+  topAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
     shadowRadius: 8,
-    elevation: 5,
+    elevation: 8,
   },
-  quickActionIconWrapper: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "rgba(255,255,255,0.25)",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  quickActionIcon: {
-    fontSize: 24,
-  },
-  quickActionText: {
-    fontWeight: "700",
-    fontSize: 14,
-    textAlign: "center",
+  topAvatarText: {
+    fontSize: 20,
+    fontWeight: 'bold',
   },
 
-  // Stats Section
-  statsSection: {
-    paddingHorizontal: 24,
-    marginBottom: 32,
-  },
-  statsGrid: {
-    flexDirection: "row",
+  statsContainer: {
+    flexDirection: 'row',
     gap: 12,
   },
   statCard: {
     flex: 1,
-    padding: 20,
-    borderRadius: 16,
-    borderWidth: 2,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    minHeight: 120,
+  },
+  statContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
   },
   statNumber: {
     fontSize: 28,
-    fontWeight: "bold",
-    marginBottom: 8,
+    fontWeight: 'bold',
+    marginBottom: 4,
+    lineHeight: 32,
   },
   statLabel: {
     fontSize: 14,
-    fontWeight: "600",
-    textAlign: "center",
+    fontWeight: '600',
+  },
+  statIcon: {
+    fontSize: 24,
+    marginTop: 8,
+    lineHeight: 32,
+  },
+  actionsCard: {
+    marginTop: 8,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 16,
+  },
+  actionsGrid: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
+  },
+  recentTripsCard: {
+    marginTop: 8,
+  },
+  sectionSubtitle: {
+    fontSize: 14,
+    marginTop: 4,
+  },
+  emptyStateCard: {
+    marginTop: 8,
+    minHeight: 200,
+  },
+  emptyStateContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    paddingVertical: 20,
+  },
+  emptyStateIcon: {
+    fontSize: 64,
+    marginBottom: 16,
+    lineHeight: 72,
+  },
+  emptyStateTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  emptyStateSubtitle: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  emptyStateButton: {
+    minWidth: 200,
   },
 
-  // Features Section
-  featuresSection: {
-    paddingHorizontal: 24,
-    marginBottom: 32,
+  featuresCard: {
+    marginTop: 8,
   },
-  featuresContainer: {
-    gap: 16,
+  featuresGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 12,
   },
-  featureCard: {
-    padding: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    flexDirection: "row",
-    alignItems: "flex-start",
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  featureIconContainer: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 16,
-    flexShrink: 0,
+  featureItem: {
+    width: (width - 40) / 2,
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+    justifyContent: 'center',
   },
   featureIcon: {
-    fontSize: 28,
+    fontSize: 32,
+    textAlign: 'center',
+    lineHeight: 40,
   },
-  featureContent: {
-    flex: 1,
-    flexShrink: 1,
+  featureIconContainer: {
+    width: 50,
+    height: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   featureTitle: {
-    fontSize: 18,
+    fontSize: 20,
+    fontWeight: 'bold',
     marginBottom: 6,
-    fontWeight: "700",
-    flexWrap: "wrap",
+    textAlign: 'center',
+    width: '100%',
   },
   featureDescription: {
-    fontSize: 14,
-    opacity: 0.8,
-    lineHeight: 20,
-    flexWrap: "wrap",
-  },
-
-  // Call to Action
-  ctaSection: {
-    paddingHorizontal: 24,
-    marginBottom: 32,
-  },
-  ctaCard: {
-    padding: 24,
-    borderRadius: 20,
-    borderWidth: 2,
-    flexDirection: "row",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  ctaIconContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "rgba(108, 71, 255, 0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 16,
-  },
-  ctaIcon: {
-    fontSize: 28,
-  },
-  ctaTextContainer: {
-    flex: 1,
-    marginRight: 16,
-  },
-  ctaTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    marginBottom: 8,
-  },
-  ctaDescription: {
-    fontSize: 14,
-    opacity: 0.8,
-    lineHeight: 20,
-  },
-  ctaButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 25,
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  ctaButtonText: {
-    color: "white",
-    fontWeight: "700",
     fontSize: 16,
-  },
-
-  // Footer
-  footer: {
-    padding: 24,
-    alignItems: "center",
-  },
-  footerText: {
-    fontSize: 14,
-    opacity: 0.6,
-    textAlign: "center",
+    textAlign: 'center',
+    lineHeight: 20,
+    width: '100%',
   },
 });

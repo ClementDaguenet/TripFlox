@@ -1,26 +1,35 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
+import { AnimatedWaves } from '@/components/ui/animated-waves';
+import { GlassCard } from '@/components/ui/glass-card';
+import { GradientBackground } from '@/components/ui/gradient-background';
+import { GradientButton } from '@/components/ui/gradient-button';
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
 import { getUserProfile, updateUserProfile, UserRow } from '@/contexts/db';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
-import RNDateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import { useTranslation } from '@/hooks/use-translation';
+import { disableGeocoding, enableGeocoding, isGeocodingEnabled } from '@/services/location-utils';
+import RNDateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { Link } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
-  Alert,
-  Image,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  View
+    Alert,
+    Dimensions,
+    Image,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    TextInput,
+    TouchableOpacity,
+    View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const { width } = Dimensions.get('window');
 
 const COUNTRIES = [
   'France', 'United States', 'United Kingdom', 'Germany', 'Spain', 'Italy', 
@@ -29,10 +38,14 @@ const COUNTRIES = [
 
 export default function ProfileScreen() {
   const { currentUserEmail, logout, deleteAccount } = useAuth();
+  const { themeMode, setThemeMode } = useTheme();
+  const { locale, setLocale } = useLanguage();
+  const { t } = useTranslation();
   const [profile, setProfile] = useState<UserRow | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [showBirthDatePicker, setShowBirthDatePicker] = useState(false);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   
   // Form fields
   const [username, setUsername] = useState('');
@@ -43,66 +56,82 @@ export default function ProfileScreen() {
   const [birthDate, setBirthDate] = useState<Date | null>(null);
   const [avatar, setAvatar] = useState('');
   const [country, setCountry] = useState('');
+  const [geocodingEnabled, setGeocodingEnabled] = useState(false);
   
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const inputBorder = useThemeColor({}, 'icon');
-  const textColor = useThemeColor({}, 'text');
+  const inputBorder = theme.icon;
+  const textColor = theme.text;
   const insets = useSafeAreaInsets();
 
   const loadProfile = useCallback(async () => {
-    try {
-      if (!currentUserEmail) return;
-      const userProfile = await getUserProfile(currentUserEmail);
-      setProfile(userProfile);
-      if (userProfile) {
-        setUsername(userProfile.username);
-        setFirstName(userProfile.firstName || '');
-        setLastName(userProfile.lastName || '');
-        setEmail(userProfile.email);
-        setMobile(userProfile.mobile || '');
-        setBirthDate(userProfile.birthDate ? new Date(userProfile.birthDate) : null);
-        setAvatar(userProfile.avatar || '');
-        setCountry(userProfile.country || '');
-      } else {
-        console.log('No profile found for user');
-      }
-    } catch (error) {
-      console.error('Error loading profile:', error);
+    if (!currentUserEmail) return;
+    const userProfile = await getUserProfile(currentUserEmail);
+    setProfile(userProfile);
+    
+    if (userProfile) {
+      setUsername(userProfile.username || '');
+      setFirstName(userProfile.firstName || '');
+      setLastName(userProfile.lastName || '');
+      setEmail(userProfile.email || '');
+      setMobile(userProfile.mobile || '');
+      setBirthDate(userProfile.birthDate ? new Date(userProfile.birthDate) : null);
+      setAvatar(userProfile.avatar || '');
+      setCountry(userProfile.country || '');
     }
+    
+    // Initialiser l'état du géocodage
+    setGeocodingEnabled(isGeocodingEnabled());
   }, [currentUserEmail]);
 
-  useFocusEffect(useCallback(() => {
-    loadProfile();
-  }, [loadProfile]));
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+    }, [loadProfile])
+  );
 
   const handleSave = async () => {
-    if (!currentUserEmail) return;
+    if (!profile) return;
     
+    setIsSaving(true);
     try {
-      await updateUserProfile(currentUserEmail, {
-        firstName: firstName || undefined,
-        lastName: lastName || undefined,
-        mobile: mobile || undefined,
-        birthDate: birthDate?.getTime() || undefined,
-        avatar: avatar || undefined,
-        country: country || undefined,
+      await updateUserProfile(profile.email, {
+        username,
+        firstName,
+        lastName,
+        mobile,
+        birthDate: birthDate ? birthDate.getTime() : undefined,
+        avatar,
+        country,
       });
       
-      await loadProfile();
+      setProfile({ ...profile, username, firstName, lastName, mobile, birthDate: birthDate ? birthDate.getTime() : undefined, avatar, country });
       setIsEditing(false);
-      Alert.alert('Success', 'Profile updated successfully!');
+      Alert.alert(t('common.success'), t('alerts.profileUpdatedSuccess'));
     } catch (error) {
-      Alert.alert('Error', 'Failed to update profile');
+      Alert.alert(t('common.error'), t('alerts.failedToUpdateProfile'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const toggleGeocoding = () => {
+    const newState = !geocodingEnabled;
+    setGeocodingEnabled(newState);
+    
+    if (newState) {
+      enableGeocoding();
+    } else {
+      disableGeocoding();
     }
   };
 
   const handleCancel = () => {
     if (profile) {
-      setUsername(profile.username);
+      setUsername(profile.username || '');
       setFirstName(profile.firstName || '');
       setLastName(profile.lastName || '');
-      setEmail(profile.email);
+      setEmail(profile.email || '');
       setMobile(profile.mobile || '');
       setBirthDate(profile.birthDate ? new Date(profile.birthDate) : null);
       setAvatar(profile.avatar || '');
@@ -111,25 +140,56 @@ export default function ProfileScreen() {
     setIsEditing(false);
   };
 
-  const showDatePicker = () => {
-    if (Platform.OS === 'android') {
-      DateTimePickerAndroid.open({
-        value: birthDate || new Date(),
-        onChange: (_, selectedDate) => {
-          setBirthDate(selectedDate || birthDate);
-        },
-        mode: 'date',
-        is24Hour: true,
-      });
+  const pickImage = async () => {
+    if (avatar) {
+      // Si il y a déjà une image, proposer de la supprimer ou de la changer
+      Alert.alert(
+        t('profile.profilePhoto'),
+        t('profile.photoActions'),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          { text: t('profile.takePhoto'), onPress: takePhoto },
+          { text: t('profile.chooseFromGallery'), onPress: selectFromGallery },
+          { text: t('profile.removePhoto'), style: 'destructive', onPress: () => setAvatar('') }
+        ]
+      );
     } else {
-      setShowBirthDatePicker(true);
+      // Si pas d'image, proposer de prendre ou choisir
+      Alert.alert(
+        t('profile.addProfilePhoto'),
+        t('profile.addPhotoPrompt'),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          { text: t('profile.takePhoto'), onPress: takePhoto },
+          { text: t('profile.chooseFromGallery'), onPress: selectFromGallery }
+        ]
+      );
     }
   };
 
-  const pickImage = async () => {
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(t('common.permissionDenied'), t('profile.cameraPermissionRequired'));
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 1,
+    });
+
+    if (!result.canceled) {
+      setAvatar(result.assets[0].uri);
+    }
+  };
+
+  const selectFromGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission required', 'Sorry, we need camera roll permissions to select an avatar!');
+      Alert.alert(t('common.permissionDenied'), t('profile.galleryPermissionRequired'));
       return;
     }
 
@@ -140,263 +200,422 @@ export default function ProfileScreen() {
       quality: 1,
     });
 
-    if (!result.canceled && result.assets[0]) {
+    if (!result.canceled) {
       setAvatar(result.assets[0].uri);
     }
   };
 
   const handleLogout = () => {
     Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
+      t('profile.logout'),
+      t('profile.logoutConfirm'),
       [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Logout', style: 'destructive', onPress: logout }
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('profile.logout'), style: 'destructive', onPress: logout }
       ]
     );
   };
 
   const handleDeleteAccount = () => {
     Alert.alert(
-      'Delete Account',
-      'Are you sure you want to delete your account? This action cannot be undone.',
+      t('profile.deleteAccount'),
+      t('profile.deleteAccountConfirm'),
       [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: deleteAccount }
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('common.delete'), style: 'destructive', onPress: deleteAccount }
       ]
     );
   };
 
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    });
+  };
+
+  const renderField = (label: string, value: string, isEditable: boolean, onChangeText?: (text: string) => void, placeholder?: string) => (
+    <View style={styles.fieldContainer}>
+      <ThemedText style={[styles.fieldLabel, { color: theme.text }]}>
+        {label}
+      </ThemedText>
+      {isEditable ? (
+        <TextInput
+          style={[styles.input, { 
+            borderColor: inputBorder, 
+            color: textColor,
+            backgroundColor: theme.backgroundSecondary 
+          }]}
+          placeholder={placeholder || t('profile.enterField', { field: label.toLowerCase() })}
+          placeholderTextColor={theme.textTertiary}
+          value={value}
+          onChangeText={onChangeText}
+        />
+      ) : (
+        <View style={[styles.fieldValue, { backgroundColor: theme.backgroundSecondary }]}>
+          <ThemedText style={[styles.fieldValueText, { color: textColor }]}>
+            {value || t('profile.notSet')}
+          </ThemedText>
+        </View>
+      )}
+    </View>
+  );
+
   if (!profile) {
     return (
-      <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-        <ThemedText>Loading profile...</ThemedText>
-      </ThemedView>
+      <GradientBackground gradient="primary" style={styles.container}>
+        <AnimatedWaves intensity="medium">
+          <View style={styles.loadingContainer}>
+            <ThemedText style={[styles.loadingText, { color: theme.text }]}>{t('profile.loading')}</ThemedText>
+          </View>
+        </AnimatedWaves>
+      </GradientBackground>
     );
   }
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View style={styles.avatarContainer}>
-            {avatar ? (
-              <Image source={{ uri: avatar }} style={styles.avatar} />
-            ) : (
-              <View style={[styles.avatarPlaceholderHeader, { backgroundColor: theme.tint }]}>
-                <ThemedText style={styles.avatarText}>
-                  {username.charAt(0).toUpperCase()}
+    <GradientBackground gradient="primary" style={styles.container}>
+      <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
+              <View style={styles.headerContent}>
+                <ThemedText type="title" style={[styles.title, { color: theme.text }]}>
+                  Profile 👤
+                </ThemedText>
+                <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
+                  Manage your account information
                 </ThemedText>
               </View>
-            )}
-          </View>
-          <ThemedText type="title" style={styles.name}>
-            {firstName && lastName ? `${firstName} ${lastName}` : username}
-          </ThemedText>
-          <ThemedText style={styles.email}>{email}</ThemedText>
-        </View>
-
-        {/* Action Buttons */}
-        <View style={styles.actionButtons}>
-          {isEditing ? (
-            <View style={styles.editButtons}>
-              <TouchableOpacity style={[styles.button, styles.cancelButton]} onPress={handleCancel}>
-                <ThemedText style={styles.buttonText}>Cancel</ThemedText>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.button, styles.saveButton]} onPress={handleSave}>
-                <ThemedText style={styles.buttonText}>Save</ThemedText>
+              <TouchableOpacity
+                style={[styles.editButton, { backgroundColor: theme.tint }]}
+                onPress={() => setIsEditing(!isEditing)}
+              >
+                <ThemedText style={[styles.editButtonText, { color: theme.text }]}>
+                  {isEditing ? t('profile.cancel') : t('profile.edit')}
+                </ThemedText>
               </TouchableOpacity>
             </View>
-          ) : (
-            <TouchableOpacity style={[styles.button, styles.editButton]} onPress={() => setIsEditing(true)}>
-              <ThemedText style={styles.buttonText}>Edit Profile</ThemedText>
-            </TouchableOpacity>
-          )}
-        </View>
+          </GlassCard>
 
-        {/* Profile Form */}
-        <View style={styles.form}>
-          <View style={styles.inputGroup}>
-            <ThemedText style={styles.label}>Username</ThemedText>
-            <TextInput
-              style={[styles.input, { borderColor: inputBorder, color: textColor }]}
-              value={username}
-              onChangeText={setUsername}
-              editable={isEditing}
-              placeholderTextColor={inputBorder}
-            />
-          </View>
-
-          <View style={styles.row}>
-            <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
-              <ThemedText style={styles.label}>First Name</ThemedText>
-              <TextInput
-                style={[styles.input, { borderColor: inputBorder, color: textColor }]}
-                value={firstName}
-                onChangeText={setFirstName}
-                editable={isEditing}
-                placeholderTextColor={inputBorder}
-                placeholder="Enter first name"
-              />
-            </View>
-            <View style={[styles.inputGroup, { flex: 1, marginLeft: 8 }]}>
-              <ThemedText style={styles.label}>Last Name</ThemedText>
-              <TextInput
-                style={[styles.input, { borderColor: inputBorder, color: textColor }]}
-                value={lastName}
-                onChangeText={setLastName}
-                editable={isEditing}
-                placeholderTextColor={inputBorder}
-                placeholder="Enter last name"
-              />
-            </View>
-          </View>
-
-          <View style={styles.inputGroup}>
-            <ThemedText style={styles.label}>Email</ThemedText>
-            <TextInput
-              style={[styles.input, { borderColor: inputBorder, color: textColor }]}
-              value={email}
-              editable={false}
-              placeholderTextColor={inputBorder}
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <ThemedText style={styles.label}>Mobile</ThemedText>
-            <TextInput
-              style={[styles.input, { borderColor: inputBorder, color: textColor }]}
-              value={mobile}
-              onChangeText={setMobile}
-              editable={isEditing}
-              placeholderTextColor={inputBorder}
-              placeholder="Enter mobile number"
-              keyboardType="phone-pad"
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <ThemedText style={styles.label}>Birth Date</ThemedText>
-            <TouchableOpacity 
-              style={[styles.input, styles.dateInput, { borderColor: inputBorder }]} 
-              onPress={isEditing ? showDatePicker : undefined}
-              disabled={!isEditing}
-            >
-              <ThemedText style={[styles.dateText, { color: birthDate ? textColor : inputBorder }]}>
-                {birthDate ? birthDate.toDateString() : 'Select birth date'}
-              </ThemedText>
-            </TouchableOpacity>
-            {Platform.OS === 'ios' && showBirthDatePicker && (
-              <RNDateTimePicker
-                value={birthDate || new Date()}
-                mode="date"
-                display="inline"
-                onChange={(_, selectedDate) => {
-                  if (selectedDate) {
-                    setBirthDate(selectedDate);
-                  }
-                  setShowBirthDatePicker(false);
-                }}
-              />
-            )}
-          </View>
-
-          <View style={styles.inputGroup}>
-            <ThemedText style={styles.label}>Country</ThemedText>
-            <TouchableOpacity 
-              style={[styles.input, styles.pickerInput, { borderColor: inputBorder }]} 
-              onPress={isEditing ? () => setShowCountryPicker(true) : undefined}
-              disabled={!isEditing}
-            >
-              <ThemedText style={[styles.pickerText, { color: country ? textColor : inputBorder }]}>
-                {country || 'Select country'}
-              </ThemedText>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.inputGroup}>
-            <ThemedText style={styles.label}>Avatar</ThemedText>
+          <GlassCard style={styles.avatarCard} blurIntensity={25}>
             <View style={styles.avatarSection}>
-              <View style={styles.avatarPreview}>
+              <TouchableOpacity 
+                style={styles.avatarContainer}
+                onPress={isEditing ? pickImage : undefined}
+                disabled={!isEditing}
+              >
                 {avatar ? (
-                  <Image source={{ uri: avatar }} style={styles.avatarImage} />
+                  <Image source={{ uri: avatar }} style={styles.avatar} />
                 ) : (
                   <View style={[styles.avatarPlaceholder, { backgroundColor: theme.tint }]}>
-                    <ThemedText style={styles.avatarPlaceholderText}>
-                      {username.charAt(0).toUpperCase()}
+                    <ThemedText style={[styles.avatarText, { lineHeight: 60, color: theme.text }]}>
+                      {(firstName || username || 'U').charAt(0).toUpperCase()}
+                    </ThemedText>
+                  </View>
+                )}
+                {isEditing && (
+                  <View style={styles.avatarEditOverlay}>
+                    <ThemedText style={styles.avatarEditText}>
+                      {avatar ? '✏️' : '📷'}
+                    </ThemedText>
+                  </View>
+                )}
+              </TouchableOpacity>
+              <ThemedText style={[styles.avatarLabel, { color: theme.text }]}>
+                {isEditing 
+                  ? (avatar ? t('newTrip.tapToChangePhoto') : t('newTrip.tapToAddPhoto'))
+                  : t('newTrip.profilePhoto')
+                }
+              </ThemedText>
+            </View>
+          </GlassCard>
+
+          <GlassCard style={styles.infoCard} blurIntensity={20}>
+            <ThemedTextI18n 
+              i18nKey="sections.personalInfo" 
+              style={[styles.sectionTitle, { color: theme.text }]}
+            />
+            
+            <View style={styles.fieldsContainer}>
+              {renderField(t('profile.username'), username, isEditing, setUsername)}
+              {renderField(t('profile.firstName'), firstName, isEditing, setFirstName)}
+              {renderField(t('profile.lastName'), lastName, isEditing, setLastName)}
+              {renderField(t('profile.email'), email, false)}
+              {renderField(t('profile.mobile'), mobile, isEditing, setMobile, t('profile.enterPhoneNumber'))}
+              
+              <View style={styles.fieldContainer}>
+                <ThemedTextI18n 
+                  i18nKey="profile.birthDate" 
+                  style={[styles.fieldLabel, { color: theme.text }]}
+                />
+                {isEditing ? (
+                  <TouchableOpacity
+                    style={[styles.dateButton, { 
+                      borderColor: inputBorder,
+                      backgroundColor: theme.backgroundSecondary 
+                    }]}
+                    onPress={() => setShowBirthDatePicker(true)}
+                  >
+                    <ThemedText style={[styles.dateText, { color: textColor }]}>
+                      {birthDate ? formatDate(birthDate) : t('profile.selectBirthDate')}
+                    </ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={[styles.fieldValue, { backgroundColor: theme.backgroundSecondary }]}>
+                    <ThemedText style={[styles.fieldValueText, { color: textColor }]}>
+                      {birthDate ? formatDate(birthDate) : t('profile.notSet')}
                     </ThemedText>
                   </View>
                 )}
               </View>
-              {isEditing && (
-                <TouchableOpacity style={[styles.button, styles.avatarButton]} onPress={pickImage}>
-                  <ThemedText style={styles.buttonText}>Select Photo</ThemedText>
-                </TouchableOpacity>
-              )}
+
+              <View style={styles.fieldContainer}>
+                <ThemedText style={[styles.fieldLabel, { color: theme.text }]}>
+                  Country
+                </ThemedText>
+                {isEditing ? (
+                  <TouchableOpacity
+                    style={[styles.dateButton, { 
+                      borderColor: inputBorder,
+                      backgroundColor: theme.backgroundSecondary 
+                    }]}
+                    onPress={() => setShowCountryPicker(true)}
+                  >
+                    <ThemedText style={[styles.dateText, { color: textColor }]}>
+                      {country || t('profile.selectCountry')}
+                    </ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={[styles.fieldValue, { backgroundColor: theme.backgroundSecondary }]}>
+                    <ThemedText style={[styles.fieldValueText, { color: textColor }]}>
+                      {country || t('profile.notSet')}
+                    </ThemedText>
+                  </View>
+                )}
+              </View>
             </View>
-            <TextInput
-              style={[styles.input, { borderColor: inputBorder, color: textColor }]}
-              value={avatar}
-              onChangeText={setAvatar}
-              editable={isEditing}
-              placeholderTextColor={inputBorder}
-              placeholder="Or enter avatar image URL"
+          </GlassCard>
+
+          {isEditing && (
+            <View style={styles.actionButtons}>
+              <GradientButton
+                title={t('buttons.saveChanges')}
+                gradient="primary"
+                size="lg"
+                style={styles.actionButton}
+                onPress={handleSave}
+                disabled={isSaving}
+              />
+              <GradientButton
+                title={t('buttons.cancel')}
+                gradient="secondary"
+                size="lg"
+                style={styles.actionButton}
+                onPress={handleCancel}
+              />
+            </View>
+          )}
+
+          <GlassCard style={styles.preferencesCard} blurIntensity={20}>
+            <ThemedTextI18n 
+              i18nKey="profile.preferences" 
+              style={[styles.sectionTitle, { color: theme.text }]}
             />
-          </View>
-        </View>
+            
+            <View style={styles.fieldContainer}>
+              <ThemedTextI18n 
+                i18nKey="profile.theme" 
+                style={[styles.fieldLabel, { color: theme.text }]}
+              />
+              <View style={styles.themeOptions}>
+                {[
+                  { value: 'light', label: t('common.light'), icon: '☀️' },
+                  { value: 'dark', label: t('common.dark'), icon: '🌙' },
+                  { value: 'system', label: t('common.system'), icon: '📱' }
+                ].map((option) => (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.themeOption,
+                      {
+                        backgroundColor: themeMode === option.value ? theme.tint : theme.backgroundSecondary,
+                        borderColor: themeMode === option.value ? theme.tint : inputBorder,
+                      }
+                    ]}
+                    onPress={() => setThemeMode(option.value as 'light' | 'dark' | 'system')}
+                  >
+                    <ThemedText style={[styles.themeOptionIcon, { color: theme.text }]}>
+                      {option.icon}
+                    </ThemedText>
+                    <ThemedText style={[
+                      styles.themeOptionLabel,
+                      { 
+                        color: themeMode === option.value ? theme.text : theme.textSecondary,
+                        fontWeight: themeMode === option.value ? '600' : '400'
+                      }
+                    ]}>
+                      {option.label}
+                    </ThemedText>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
 
-        {/* Danger Zone */}
-        <View style={styles.dangerZone}>
-          <ThemedText type="subtitle" style={styles.dangerTitle}>Danger Zone</ThemedText>
-          <TouchableOpacity style={[styles.button, styles.logoutButton]} onPress={handleLogout}>
-            <ThemedText style={styles.buttonText}>Logout</ThemedText>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.button, styles.deleteButton]} onPress={handleDeleteAccount}>
-            <ThemedText style={styles.buttonText}>Delete Account</ThemedText>
-          </TouchableOpacity>
-        </View>
+            <View style={styles.fieldContainer}>
+              <ThemedTextI18n 
+                i18nKey="profile.language" 
+                style={[styles.fieldLabel, { color: theme.text }]}
+              />
+              <View style={styles.languageOptions}>
+                {[
+                  { value: 'fr', label: 'Français', flag: '🇫🇷' },
+                  { value: 'en', label: t('common.english'), flag: '🇺🇸' }
+                ].map((option) => (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.languageOption,
+                      {
+                        backgroundColor: locale === option.value ? theme.tint : theme.backgroundSecondary,
+                        borderColor: locale === option.value ? theme.tint : inputBorder,
+                      }
+                    ]}
+                    onPress={() => setLocale(option.value as 'fr' | 'en')}
+                  >
+                    <ThemedText style={[styles.languageOptionFlag, { color: theme.text }]}>
+                      {option.flag}
+                    </ThemedText>
+                    <ThemedText style={[
+                      styles.languageOptionLabel,
+                      { 
+                        color: locale === option.value ? theme.text : theme.textSecondary,
+                        fontWeight: locale === option.value ? '600' : '400'
+                      }
+                    ]}>
+                      {option.label}
+                    </ThemedText>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+            
+            <View style={styles.fieldContainer}>
+              <ThemedTextI18n 
+                i18nKey="profile.geocoding" 
+                style={[styles.fieldLabel, { color: theme.text }]}
+              />
+              <ThemedTextI18n 
+                i18nKey="profile.geocodingDescription" 
+                style={[styles.fieldDescription, { color: theme.textSecondary }]}
+              />
+              <View style={styles.geocodingOptions}>
+                <TouchableOpacity
+                  style={[
+                    styles.geocodingOption,
+                    {
+                      backgroundColor: geocodingEnabled ? theme.tint : theme.backgroundSecondary,
+                      borderColor: geocodingEnabled ? theme.tint : inputBorder,
+                    }
+                  ]}
+                  onPress={toggleGeocoding}
+                >
+                  <ThemedText style={[styles.geocodingOptionIcon, { color: theme.text }]}>
+                    🌍
+                  </ThemedText>
+                  <ThemedText style={[
+                    styles.geocodingOptionLabel,
+                    { 
+                      color: geocodingEnabled ? theme.text : theme.textSecondary,
+                      fontWeight: geocodingEnabled ? '600' : '400'
+                    }
+                  ]}>
+                    {geocodingEnabled ? t('profile.enabled') : t('profile.disabled')}
+                  </ThemedText>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </GlassCard>
 
-        {/* Dev Tools */}
-        <View style={styles.devZone}>
-          <ThemedText type="subtitle" style={styles.devTitle}>Developer Tools</ThemedText>
-          <Link href="/reset-auth" asChild>
-            <TouchableOpacity style={[styles.button, styles.devButton]}>
-              <ThemedText style={styles.buttonText}>Reset Auth (Clear Token)</ThemedText>
-            </TouchableOpacity>
-          </Link>
-        </View>
-      </ScrollView>
+          <GlassCard style={styles.accountCard} blurIntensity={15}>
+            <ThemedTextI18n 
+              i18nKey="sections.accountActions" 
+              style={[styles.sectionTitle, { color: theme.text }]}
+            />
+            
+            <View style={styles.accountActions}>
+              <GradientButton
+                title={t('buttons.logout')}
+                gradient="fire"
+                size="md"
+                style={styles.accountButton}
+                onPress={handleLogout}
+              />
+              <GradientButton
+                title={t('buttons.deleteAccount')}
+                gradient="night"
+                size="md"
+                style={styles.accountButton}
+                onPress={handleDeleteAccount}
+              />
+            </View>
+          </GlassCard>
+        </ScrollView>
+      </AnimatedWaves>
 
-      {/* Country Picker Modal */}
+      {showBirthDatePicker && (
+        <RNDateTimePicker
+          value={birthDate || new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, selectedDate) => {
+            setShowBirthDatePicker(false);
+            if (selectedDate) {
+              setBirthDate(selectedDate);
+            }
+          }}
+        />
+      )}
+
       {showCountryPicker && (
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modal, { backgroundColor: theme.background }]}>
-            <ThemedText type="subtitle" style={styles.modalTitle}>Select Country</ThemedText>
+        <View style={styles.countryPickerOverlay}>
+          <GlassCard style={styles.countryPickerCard} blurIntensity={30}>
+            <ThemedText style={[styles.countryPickerTitle, { color: theme.text }]}>
+              Select Country
+            </ThemedText>
             <ScrollView style={styles.countryList}>
               {COUNTRIES.map((countryName) => (
                 <TouchableOpacity
                   key={countryName}
-                  style={styles.countryItem}
+                  style={[styles.countryItem, country === countryName && styles.countryItemSelected]}
                   onPress={() => {
                     setCountry(countryName);
                     setShowCountryPicker(false);
                   }}
                 >
-                  <ThemedText style={styles.countryText}>{countryName}</ThemedText>
+                  <ThemedText style={[styles.countryItemText, { color: theme.text }]}>
+                    {countryName}
+                  </ThemedText>
                 </TouchableOpacity>
               ))}
             </ScrollView>
             <TouchableOpacity
-              style={[styles.button, styles.cancelButton]}
+              style={styles.countryPickerClose}
               onPress={() => setShowCountryPicker(false)}
             >
-              <ThemedText style={styles.buttonText}>Cancel</ThemedText>
+              <ThemedText style={[styles.countryPickerCloseText, { color: theme.text }]}>
+                Close
+              </ThemedText>
             </TouchableOpacity>
-          </View>
+          </GlassCard>
         </View>
       )}
-    </ThemedView>
+    </GradientBackground>
   );
 }
 
@@ -406,21 +625,68 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
-    paddingHorizontal: 20,
+  },
+  scrollContent: {
+    padding: 16,
+    gap: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 18,
+  },
+
+  // Header
+  headerCard: {
+    marginBottom: 8,
   },
   header: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 30,
+    justifyContent: 'space-between',
+  },
+  headerContent: {
+    flex: 1,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.8,
+  },
+  editButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+  },
+  editButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  // Avatar
+  avatarCard: {
+    marginBottom: 8,
+  },
+  avatarSection: {
+    alignItems: 'center',
   },
   avatarContainer: {
-    marginBottom: 16,
+    position: 'relative',
+    marginBottom: 12,
   },
   avatar: {
     width: 100,
     height: 100,
     borderRadius: 50,
   },
-  avatarPlaceholderHeader: {
+  avatarPlaceholder: {
     width: 100,
     height: 100,
     borderRadius: 50,
@@ -430,140 +696,168 @@ const styles = StyleSheet.create({
   avatarText: {
     fontSize: 36,
     fontWeight: 'bold',
-    color: 'white',
   },
-  name: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  email: {
-    fontSize: 16,
-    opacity: 0.7,
-  },
-  actionButtons: {
-    marginBottom: 30,
-  },
-  editButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  button: {
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
+  avatarEditOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  editButton: {
-    backgroundColor: '#6c47ff',
-  },
-  saveButton: {
-    backgroundColor: '#4CAF50',
-    flex: 1,
-  },
-  cancelButton: {
-    backgroundColor: '#757575',
-    flex: 1,
-  },
-  logoutButton: {
-    backgroundColor: '#FF9800',
-    marginBottom: 8,
-  },
-  deleteButton: {
-    backgroundColor: '#F44336',
-  },
-  buttonText: {
-    color: 'white',
-    fontWeight: '600',
+  avatarEditText: {
     fontSize: 16,
   },
-  form: {
-    marginBottom: 30,
+  avatarLabel: {
+    fontSize: 14,
+    opacity: 0.8,
   },
-  inputGroup: {
-    marginBottom: 20,
+
+  // Info
+  infoCard: {
+    marginBottom: 8,
   },
-  row: {
-    flexDirection: 'row',
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 16,
   },
-  label: {
+  fieldsContainer: {
+    gap: 16,
+  },
+  fieldContainer: {
+    gap: 8,
+  },
+  fieldLabel: {
     fontSize: 16,
     fontWeight: '600',
-    marginBottom: 8,
   },
   input: {
     borderWidth: 1,
-    borderRadius: 8,
+    borderRadius: 12,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     fontSize: 16,
   },
-  dateInput: {
+  fieldValue: {
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  fieldValueText: {
+    fontSize: 16,
+  },
+  dateButton: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     justifyContent: 'center',
   },
   dateText: {
     fontSize: 16,
   },
-  pickerInput: {
-    justifyContent: 'center',
-  },
-  pickerText: {
-    fontSize: 16,
-  },
-  dangerZone: {
-    marginBottom: 30,
-  },
-  dangerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 16,
-    color: '#F44336',
-  },
-  devZone: {
-    marginBottom: 30,
-  },
-  devTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 16,
-    color: '#FF9800',
-  },
-  devButton: {
-    backgroundColor: '#FF9800',
-  },
-  avatarSection: {
+
+  // Actions
+  actionButtons: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
     gap: 12,
   },
-  avatarPreview: {
-    width: 60,
-    height: 60,
+  actionButton: {
+    flex: 1,
   },
-  avatarImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+
+  // Preferences
+  preferencesCard: {
+    marginBottom: 8,
   },
-  avatarPlaceholder: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: 'center',
+  themeOptions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  themeOption: {
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  avatarPlaceholderText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: 'white',
-  },
-  avatarButton: {
-    backgroundColor: '#2196F3',
-    paddingVertical: 8,
+    justifyContent: 'center',
+    paddingVertical: 12,
     paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 8,
   },
-  modalOverlay: {
+  themeOptionIcon: {
+    fontSize: 18,
+  },
+  themeOptionLabel: {
+    fontSize: 14,
+  },
+  languageOptions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  languageOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 8,
+  },
+  languageOptionFlag: {
+    fontSize: 18,
+  },
+  languageOptionLabel: {
+    fontSize: 14,
+  },
+  
+  // Geocoding
+  fieldDescription: {
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  geocodingOptions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  geocodingOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 8,
+  },
+  geocodingOptionIcon: {
+    fontSize: 18,
+  },
+  geocodingOptionLabel: {
+    fontSize: 14,
+  },
+
+  // Account
+  accountCard: {
+    marginBottom: 8,
+  },
+  accountActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  accountButton: {
+    flex: 1,
+  },
+
+  // Country Picker
+  countryPickerOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
@@ -572,29 +866,40 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  modal: {
-    width: '80%',
-    maxHeight: '60%',
-    borderRadius: 12,
     padding: 20,
   },
-  modalTitle: {
+  countryPickerCard: {
+    width: '100%',
+    maxHeight: '70%',
+  },
+  countryPickerTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 16,
     textAlign: 'center',
+    marginBottom: 16,
   },
   countryList: {
-    maxHeight: 200,
+    maxHeight: 300,
   },
   countryItem: {
     paddingVertical: 12,
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderRadius: 8,
+    marginBottom: 4,
   },
-  countryText: {
+  countryItemSelected: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  countryItemText: {
     fontSize: 16,
+  },
+  countryPickerClose: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  countryPickerCloseText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

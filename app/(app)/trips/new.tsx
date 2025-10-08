@@ -1,17 +1,29 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { insertTrip } from '@/contexts/db';
-import { useThemeColor } from '@/hooks/use-theme-color';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
+import { AnimatedWaves } from '@/components/ui/animated-waves';
+import { GlassCard } from '@/components/ui/glass-card';
+import { GradientBackground } from '@/components/ui/gradient-background';
+import { GradientButton } from '@/components/ui/gradient-button';
+import { Colors } from '@/constants/theme';
+import { useAuth } from '@/contexts/AuthContext';
+import { getUserProfile, insertTrip } from '@/contexts/db';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useTranslation } from '@/hooks/use-translation';
+import RNDateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Image, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Dimensions, Image, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+const { width } = Dimensions.get('window');
+
 export default function NewTripScreen() {
+  const { t } = useTranslation();
   const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState<Date | null>(null);
   const [endDate, setEndDate] = useState<Date | null>(null);
   const [showStart, setShowStart] = useState(false);
@@ -23,27 +35,120 @@ export default function NewTripScreen() {
   const [isLoadingLocation, setIsLoadingLocation] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [userId, setUserId] = useState<number | null>(null);
   const mapRef = useRef<MapView>(null);
-  const border = useThemeColor({}, 'icon');
-  const text = useThemeColor({}, 'text');
+  const colorScheme = useColorScheme();
+  const theme = Colors[colorScheme ?? 'light'];
+  const border = theme.border;
+  const text = theme.text;
   const insets = useSafeAreaInsets();
+  const { currentUserEmail } = useAuth();
+
+  useEffect(() => {
+    const loadUserId = async () => {
+      if (currentUserEmail) {
+        const user = await getUserProfile(currentUserEmail);
+        if (user) {
+          setUserId(user.id);
+        }
+      }
+    };
+    loadUserId();
+  }, [currentUserEmail]);
+
+  // Obtenir automatiquement la position actuelle
+  useEffect(() => {
+    const getCurrentLocation = async () => {
+      try {
+        setIsLoadingLocation(true);
+        
+        // Demander les permissions de localisation
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          console.log('Location permission denied');
+          return;
+        }
+
+        // Obtenir la position actuelle
+        const location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        setLat(location.coords.latitude);
+        setLng(location.coords.longitude);
+        
+        // Centrer la carte sur la position actuelle
+        if (mapRef.current) {
+          mapRef.current.animateToRegion({
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          });
+        }
+      } catch (error) {
+        console.error('Error getting current location:', error);
+      } finally {
+        setIsLoadingLocation(false);
+      }
+    };
+
+    getCurrentLocation();
+  }, []);
 
   const handleSave = async () => {
     setError(null);
-    if (!title) {
-      setError('Title is required');
-      return;
-    }
-    const start = startDate ? startDate.getTime() : null;
-    const end = endDate ? endDate.getTime() : null;
-    const tripId = await insertTrip({ title, startDate: start, endDate: end, coverUri: coverUri || null });
+    setIsSaving(true);
     
-    // Update location if set
-    if (lat && lng) {
-      const { updateTripLocation } = await import('@/contexts/db');
-      await updateTripLocation(tripId, lat, lng);
+    try {
+      if (!userId) {
+        setError('User not authenticated');
+        return;
+      }
+      
+      if (!title.trim()) {
+        setError('Title is required');
+        return;
+      }
+      
+      if (!startDate) {
+        setError('Start date is required');
+        return;
+      }
+      
+      if (!endDate) {
+        setError('End date is required');
+        return;
+      }
+      
+      if (startDate >= endDate) {
+        setError('End date must be after start date');
+        return;
+      }
+      
+      const start = startDate.getTime();
+      const end = endDate.getTime();
+      
+      const tripId = await insertTrip({ 
+        userId,
+        title: title.trim(), 
+        description: description.trim() || null,
+        startDate: start, 
+        endDate: end, 
+        coverUri: coverUri || null,
+        lat: lat || null,
+        lng: lng || null
+      });
+      
+      Alert.alert(t('common.success'), t('alerts.tripCreatedSuccess'));
+      router.back();
+    } catch (err) {
+      setError(t('alerts.failedToCreateTrip'));
+      Alert.alert(t('common.error'), t('alerts.failedToCreateTrip'));
+    } finally {
+      setIsSaving(false);
     }
-    router.back();
   };
 
   const onMapPress = (e: any) => {
@@ -57,7 +162,7 @@ export default function NewTripScreen() {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission required', 'Location permission is needed to show your current position on the map.');
+        Alert.alert(t('alerts.permissionDenied'), t('alerts.locationPermissionRequired'));
         return;
       }
 
@@ -66,56 +171,25 @@ export default function NewTripScreen() {
       setLat(latitude);
       setLng(longitude);
       
-      // Center the map on the current location
       if (mapRef.current) {
         mapRef.current.animateToRegion({
           latitude,
           longitude,
-          latitudeDelta: 0.0922,
-          longitudeDelta: 0.0421,
-        }, 1000);
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        });
       }
     } catch (error) {
-      Alert.alert('Error', 'Could not get your current location. Please try again.');
+      Alert.alert(t('common.error'), t('alerts.failedToGetLocation'));
     } finally {
       setIsLoadingLocation(false);
-    }
-  };
-
-  const searchLocation = async () => {
-    if (!searchQuery.trim()) return;
-    
-    setIsSearching(true);
-    try {
-      const results = await Location.geocodeAsync(searchQuery);
-      if (results.length > 0) {
-        const { latitude, longitude } = results[0];
-        setLat(latitude);
-        setLng(longitude);
-        
-        // Center the map on the searched location
-        if (mapRef.current) {
-          mapRef.current.animateToRegion({
-            latitude,
-            longitude,
-            latitudeDelta: 0.0922,
-            longitudeDelta: 0.0421,
-          }, 1000);
-        }
-      } else {
-        Alert.alert('No results', 'No location found for your search. Please try a different search term.');
-      }
-    } catch (error) {
-      Alert.alert('Search error', 'Could not search for the location. Please try again.');
-    } finally {
-      setIsSearching(false);
     }
   };
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission required', 'Sorry, we need camera roll permissions to select a cover image!');
+      Alert.alert(t('alerts.permissionDenied'), t('alerts.cameraPermissionRequired'));
       return;
     }
 
@@ -123,291 +197,452 @@ export default function NewTripScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [16, 9],
-      quality: 0.8,
+      quality: 1,
     });
 
-    if (!result.canceled && result.assets[0]) {
+    if (!result.canceled) {
       setCoverUri(result.assets[0].uri);
     }
   };
 
-  const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission required', 'Sorry, we need camera permissions to take a photo!');
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
-      aspect: [16, 9],
-      quality: 0.8,
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric' 
     });
-
-    if (!result.canceled && result.assets[0]) {
-      setCoverUri(result.assets[0].uri);
-    }
   };
-
-  const showImagePicker = () => {
-    Alert.alert(
-      'Select Cover Image',
-      'Choose how you want to add a cover image for your trip',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Take Photo', onPress: takePhoto },
-        { text: 'Choose from Gallery', onPress: pickImage },
-      ]
-    );
-  };
-
-  useEffect(() => {
-    getCurrentLocation();
-  }, []);
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ThemedText type="link">← Back</ThemedText>
-        </TouchableOpacity>
-        <ThemedText type="title" style={styles.title}>New trip</ThemedText>
-      {!!error && <ThemedText style={styles.error}>{error}</ThemedText>}
-      <TextInput style={[styles.input, { borderColor: border, color: text }]} placeholderTextColor={border} placeholder="Title" value={title} onChangeText={setTitle} />
-      <View style={styles.row}>
-        <View style={{ flex: 1 }}>
-          <Button title={startDate ? `Start: ${startDate.toDateString()}` : 'Pick start date'} onPress={() => {
-            if (Platform.OS === 'android') {
-              const { DateTimePickerAndroid } = require('@react-native-community/datetimepicker');
-              DateTimePickerAndroid.open({
-                value: startDate ?? new Date(),
-                mode: 'date',
-                onChange: (_: any, d?: Date) => { if (d) setStartDate(d); },
-              });
-            } else if (Platform.OS === 'ios') {
-              setShowStart(true);
-            }
-          }} />
-        </View>
-        <View style={{ width: 12 }} />
-        <View style={{ flex: 1 }}>
-          <Button title={endDate ? `End: ${endDate.toDateString()}` : 'Pick end date'} onPress={() => {
-            if (Platform.OS === 'android') {
-              const { DateTimePickerAndroid } = require('@react-native-community/datetimepicker');
-              DateTimePickerAndroid.open({
-                value: endDate ?? new Date(),
-                mode: 'date',
-                onChange: (_: any, d?: Date) => { if (d) setEndDate(d); },
-              });
-            } else if (Platform.OS === 'ios') {
-              setShowEnd(true);
-            }
-          }} />
-        </View>
-      </View>
-      {Platform.OS === 'ios' && showStart ? (
-        (() => {
-          const RNDateTimePicker = require('@react-native-community/datetimepicker').default;
-          return (
-            <RNDateTimePicker value={startDate ?? new Date()} mode="date" display="inline" onChange={(_: any, d?: Date) => { if (d) setStartDate(d); setShowStart(false); }} />
-          );
-        })()
-      ) : null}
-      {Platform.OS === 'ios' && showEnd ? (
-        (() => {
-          const RNDateTimePicker = require('@react-native-community/datetimepicker').default;
-          return (
-            <RNDateTimePicker value={endDate ?? new Date()} mode="date" display="inline" onChange={(_: any, d?: Date) => { if (d) setEndDate(d); setShowEnd(false); }} />
-          );
-        })()
-      ) : null}
-          <ThemedText style={styles.label}>Cover Image</ThemedText>
-          <View style={styles.imageSection}>
-            {coverUri ? (
-              <View style={styles.imagePreview}>
-                <Image source={{ uri: coverUri }} style={styles.previewImage} />
-                <TouchableOpacity style={styles.changeImageButton} onPress={showImagePicker}>
-                  <ThemedText style={styles.changeImageText}>Change Image</ThemedText>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <TouchableOpacity style={[styles.imagePickerButton, { borderColor: border }]} onPress={showImagePicker}>
-                <ThemedText style={styles.imagePickerIcon}>📷</ThemedText>
-                <ThemedText style={[styles.imagePickerText, { color: text }]}>Add Cover Image</ThemedText>
-                <ThemedText style={[styles.imagePickerSubtext, { color: border }]}>Tap to select from gallery or take a photo</ThemedText>
+    <GradientBackground gradient="primary" style={styles.container}>
+      <AnimatedWaves intensity="medium" style={{ paddingTop: insets.top }}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <GlassCard style={styles.headerCard} blurIntensity={30}>
+            <View style={styles.header}>
+              <TouchableOpacity 
+                style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.2)' }]}
+                onPress={() => router.back()}
+              >
+                <ThemedTextI18n 
+                  i18nKey="navigation.back" 
+                  style={[styles.backButtonText, { color: theme.text }]}
+                />
               </TouchableOpacity>
-            )}
-          </View>
-      <ThemedText style={{ marginBottom: 8 }}>Choose location (tap on map or search below):</ThemedText>
-      <View style={{ height: 200, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: border, marginBottom: 12 }}>
-        <MapView
-          ref={mapRef}
-          style={{ flex: 1 }}
-          initialRegion={{
-            latitude: lat ?? 48.8566,
-            longitude: lng ?? 2.3522,
-            latitudeDelta: 0.0922,
-            longitudeDelta: 0.0421,
-          }}
-          onPress={onMapPress}
-        >
-          {lat && lng ? (
-            <Marker
-              coordinate={{ latitude: lat, longitude: lng }}
-              title="New Trip Location"
+              <View style={styles.headerContent}>
+                <ThemedTextI18n 
+                  i18nKey="newTrip.title" 
+                  type="title" 
+                  style={[styles.title, { color: theme.text }]}
+                />
+                <ThemedTextI18n 
+                  i18nKey="newTrip.subtitle" 
+                  style={[styles.subtitle, { color: theme.textSecondary }]}
+                />
+              </View>
+              <View style={styles.headerSpacer} />
+            </View>
+          </GlassCard>
+
+          <GlassCard style={styles.formCard} blurIntensity={25}>
+            <View style={styles.form}>
+              <View style={styles.inputContainer}>
+                <ThemedTextI18n 
+                  i18nKey="newTrip.tripTitle" 
+                  style={[styles.inputLabel, { color: theme.text }]}
+                />
+                <TextInput
+                  style={[styles.input, { 
+                    borderColor: border, 
+                    color: text,
+                    backgroundColor: theme.backgroundSecondary 
+                  }]}
+                  placeholder={t('placeholders.enterTripTitle')}
+                  placeholderTextColor={theme.textTertiary}
+                  value={title}
+                  onChangeText={setTitle}
+                />
+              </View>
+
+              <View style={styles.inputContainer}>
+                <ThemedTextI18n 
+                  i18nKey="newTrip.tripDescription" 
+                  style={[styles.inputLabel, { color: theme.text }]}
+                />
+                <TextInput
+                  style={[styles.textArea, { 
+                    borderColor: border, 
+                    color: text,
+                    backgroundColor: theme.backgroundSecondary 
+                  }]}
+                  placeholder={t('placeholders.describeTrip')}
+                  placeholderTextColor={theme.textTertiary}
+                  multiline
+                  numberOfLines={3}
+                  value={description}
+                  onChangeText={setDescription}
+                />
+              </View>
+
+              <View style={styles.dateRow}>
+                <View style={styles.dateContainer}>
+                  <ThemedTextI18n 
+                    i18nKey="newTrip.startDate" 
+                    style={[styles.inputLabel, { color: theme.text }]}
+                  />
+                  <TouchableOpacity
+                    style={[styles.dateButton, { 
+                      borderColor: border,
+                      backgroundColor: theme.backgroundSecondary 
+                    }]}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setShowEnd(false);
+                      setShowStart(true);
+                    }}
+                  >
+                    <ThemedText style={[styles.dateText, { color: text }]}>
+                      {startDate ? formatDate(startDate) : t('newTrip.selectStartDate')}
+                    </ThemedText>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.dateContainer}>
+                  <ThemedTextI18n 
+                    i18nKey="newTrip.endDate" 
+                    style={[styles.inputLabel, { color: theme.text }]}
+                  />
+                  <TouchableOpacity
+                    style={[styles.dateButton, { 
+                      borderColor: border,
+                      backgroundColor: theme.backgroundSecondary 
+                    }]}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setShowStart(false);
+                      setShowEnd(true);
+                    }}
+                  >
+                    <ThemedText style={[styles.dateText, { color: text }]}>
+                      {endDate ? formatDate(endDate) : t('newTrip.selectEndDate')}
+                    </ThemedText>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {error && (
+                <View style={styles.errorContainer}>
+                  <ThemedText style={styles.errorText}>
+                    {error}
+                  </ThemedText>
+                </View>
+              )}
+            </View>
+          </GlassCard>
+
+          <GlassCard style={styles.imageCard} blurIntensity={20}>
+            <ThemedTextI18n 
+              i18nKey="newTrip.tripCover" 
+              style={[styles.sectionTitle, { color: theme.text }]}
             />
-          ) : null}
-        </MapView>
-      </View>
-      
-      {/* Search and Location Controls */}
-      <View style={styles.locationSection}>
-        {/* Search Bar */}
-        <View style={styles.searchContainer}>
-          <TextInput
-            style={[styles.searchInput, { borderColor: border, color: text }]}
-            placeholder="Search for a location..."
-            placeholderTextColor={border}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            onSubmitEditing={searchLocation}
-            returnKeyType="search"
+            <TouchableOpacity style={styles.imageContainer} onPress={pickImage}>
+              {coverUri ? (
+                <Image source={{ uri: coverUri }} style={styles.coverImage} />
+              ) : (
+                <View style={[styles.imagePlaceholder, { borderColor: border }]}>
+                  <ThemedTextI18n 
+                    i18nKey="newTrip.tapToAddCover" 
+                    style={[styles.imagePlaceholderText, { color: theme.textTertiary }]}
+                  />
+                </View>
+              )}
+            </TouchableOpacity>
+          </GlassCard>
+
+          <GlassCard style={styles.mapCard} blurIntensity={20}>
+            <ThemedTextI18n 
+              i18nKey="newTrip.tripLocation" 
+              style={[styles.sectionTitle, { color: theme.text }]}
+            />
+            <ThemedTextI18n 
+              i18nKey="newTrip.tripLocationDescription" 
+              style={[styles.sectionSubtitle, { color: theme.textSecondary }]}
+            />
+            <View style={styles.mapContainer}>
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                onPress={onMapPress}
+                initialRegion={{
+                  latitude: lat || 0,
+                  longitude: lng || 0,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                }}
+              >
+                {lat && lng && (
+                  <Marker
+                    coordinate={{ latitude: lat, longitude: lng }}
+                    title={t('newTrip.tripLocation')}
+                  />
+                )}
+              </MapView>
+              {isLoadingLocation && (
+                <View style={styles.loadingOverlay}>
+                  <ThemedTextI18n 
+                    i18nKey="newTrip.gettingLocation" 
+                    style={[styles.loadingText, { color: theme.text }]}
+                  />
+                </View>
+              )}
+            </View>
+            <GradientButton
+              title={isLoadingLocation ? t('newTrip.gettingLocation') : t('newTrip.updateLocation')}
+              gradient="secondary"
+              size="md"
+              style={styles.locationButton}
+              onPress={getCurrentLocation}
+              disabled={isLoadingLocation}
+            />
+          </GlassCard>
+
+          <GradientButton
+            title={isSaving ? t('newTrip.creatingTrip') : t('newTrip.createTrip')}
+            gradient="primary"
+            size="xl"
+            style={styles.saveButton}
+            onPress={handleSave}
+            disabled={isSaving}
           />
-          <TouchableOpacity 
-            style={[styles.searchButton, { borderColor: border }]} 
-            onPress={searchLocation}
-            disabled={isSearching || !searchQuery.trim()}
-          >
-            <ThemedText style={[styles.searchButtonText, { color: text }]}>
-              {isSearching ? '...' : '🔍'}
-            </ThemedText>
-          </TouchableOpacity>
-        </View>
-        
-        {/* Current Location Button */}
-        <TouchableOpacity 
-          style={[styles.locationButton, { borderColor: border }]} 
-          onPress={getCurrentLocation}
-          disabled={isLoadingLocation}
-        >
-          <ThemedText style={[styles.locationButtonText, { color: text }]}>
-            {isLoadingLocation ? 'Getting location...' : '📍 Use my current location'}
-          </ThemedText>
-        </TouchableOpacity>
-      </View>
-      
-          <View style={{ height: 8 }} />
-          <Button title="Save" onPress={handleSave} />
         </ScrollView>
-      </ThemedView>
-    );
-  }
+      </AnimatedWaves>
+
+      {showStart && (
+        <RNDateTimePicker
+          value={startDate || new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, selectedDate) => {
+            if (selectedDate) {
+              setStartDate(selectedDate);
+            }
+            // Fermer après 2 secondes sur iOS, immédiatement sur Android
+            if (Platform.OS === 'ios') {
+              setTimeout(() => {
+                setShowStart(false);
+              }, 2000);
+            } else {
+              setShowStart(false);
+            }
+          }}
+        />
+      )}
+
+      {showEnd && (
+        <RNDateTimePicker
+          value={endDate || new Date()}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event, selectedDate) => {
+            if (selectedDate) {
+              setEndDate(selectedDate);
+            }
+            // Fermer après 2 secondes sur iOS, immédiatement sur Android
+            if (Platform.OS === 'ios') {
+              setTimeout(() => {
+                setShowEnd(false);
+              }, 2000);
+            } else {
+              setShowEnd(false);
+            }
+          }}
+        />
+      )}
+    </GradientBackground>
+  );
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  scrollView: { flex: 1 },
-  scrollContent: { padding: 16 },
-  title: { textAlign: 'center', marginBottom: 12 },
-  input: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 12 },
-  error: { color: 'red', marginBottom: 8, textAlign: 'center' },
-  row: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  backButton: { marginBottom: 12 },
-  locationSection: { marginBottom: 12 },
-  searchContainer: {
-    flexDirection: 'row',
+  container: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+    gap: 20,
+  },
+
+  // Header
+  headerCard: {
     marginBottom: 8,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginRight: 16,
+    borderRadius: 20,
+  },
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  headerContent: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  headerSpacer: {
+    width: 60, // Same width as back button to center the content
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.8,
+  },
+
+  // Form
+  formCard: {
+    marginBottom: 8,
+  },
+  form: {
+    gap: 20,
+  },
+  inputContainer: {
     gap: 8,
   },
-  searchInput: {
+  inputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+  },
+  textArea: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  dateRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  dateContainer: {
     flex: 1,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 16,
+    gap: 8,
   },
-  searchButton: {
+  dateButton: {
     borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    alignItems: 'center',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     justifyContent: 'center',
-    minWidth: 50,
+    minHeight: 50,
   },
-  searchButtonText: {
+  dateText: {
     fontSize: 16,
+  },
+  errorContainer: {
+    paddingVertical: 8,
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+
+  // Image
+  imageCard: {
+    marginBottom: 8,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  sectionSubtitle: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 12,
+    opacity: 0.8,
+  },
+  imageContainer: {
+    alignItems: 'center',
+  },
+  coverImage: {
+    width: width - 64,
+    height: 200,
+    borderRadius: 12,
+  },
+  imagePlaceholder: {
+    width: width - 64,
+    height: 200,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imagePlaceholderText: {
+    fontSize: 16,
+    textAlign: 'center',
+  },
+
+  // Map
+  mapCard: {
+    marginBottom: 8,
+  },
+  mapContainer: {
+    height: 200,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 12,
+    position: 'relative',
+  },
+  map: {
+    flex: 1,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 12,
+  },
+  loadingText: {
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   locationButton: {
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    alignItems: 'center',
+    marginBottom: 0,
   },
-      locationButtonText: {
-        fontSize: 14,
-        fontWeight: '500',
-      },
-      label: {
-        fontSize: 16,
-        fontWeight: '600',
-        marginBottom: 8,
-      },
-      imageSection: {
-        marginBottom: 16,
-      },
-      imagePreview: {
-        position: 'relative',
-      },
-      previewImage: {
-        width: '100%',
-        height: 200,
-        borderRadius: 12,
-        marginBottom: 8,
-      },
-      changeImageButton: {
-        position: 'absolute',
-        top: 8,
-        right: 8,
-        backgroundColor: 'rgba(0,0,0,0.7)',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 20,
-      },
-      changeImageText: {
-        color: 'white',
-        fontSize: 12,
-        fontWeight: '600',
-      },
-      imagePickerButton: {
-        borderWidth: 2,
-        borderStyle: 'dashed',
-        borderRadius: 12,
-        padding: 40,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'transparent',
-      },
-      imagePickerIcon: {
-        fontSize: 48,
-        marginBottom: 12,
-      },
-      imagePickerText: {
-        fontSize: 16,
-        fontWeight: '600',
-        marginBottom: 4,
-        textAlign: 'center',
-      },
-      imagePickerSubtext: {
-        fontSize: 12,
-        textAlign: 'center',
-        opacity: 0.7,
-      },
-    });
 
-
+  // Save Button
+  saveButton: {
+    marginTop: 8,
+  },
+});

@@ -1,10 +1,11 @@
 import { ThemedText } from '@/components/themed-text';
+import { ThemedTextI18n } from '@/components/themed-text-i18n';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { ChecklistItemRow, ChecklistRow, deleteChecklist, deleteChecklistItem, getChecklistById, getChecklistItems, insertChecklistItem, updateChecklistItem } from '@/contexts/db';
 import { scheduleChecklistReminder } from '@/contexts/notifications';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useThemeColor } from '@/hooks/use-theme-color';
+import { useTranslation } from '@/hooks/use-translation';
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useState } from 'react';
@@ -14,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 const { width } = Dimensions.get('window');
 
 export default function ChecklistDetailScreen() {
+  const { t } = useTranslation();
   const { id, checklistId } = useLocalSearchParams<{ id: string; checklistId: string }>();
   const [checklist, setChecklist] = useState<ChecklistRow | null>(null);
   const [items, setItems] = useState<ChecklistItemRow[]>([]);
@@ -21,8 +23,8 @@ export default function ChecklistDetailScreen() {
   const [isAddingItem, setIsAddingItem] = useState(false);
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-  const text = useThemeColor({}, 'text');
-  const border = useThemeColor({}, 'icon');
+  const text = theme.text;
+  const border = theme.icon;
   const insets = useSafeAreaInsets();
 
   const loadData = useCallback(async () => {
@@ -52,7 +54,7 @@ export default function ChecklistDetailScreen() {
       await updateChecklistItem(itemId, { isCompleted: !isCompleted });
       loadData();
     } catch (error) {
-      Alert.alert('Error', 'Failed to update item');
+      Alert.alert(t('common.error'), t('checklist.failedToUpdateItem'));
     }
   };
 
@@ -70,7 +72,7 @@ export default function ChecklistDetailScreen() {
       setIsAddingItem(false);
       loadData();
     } catch (error) {
-      Alert.alert('Error', 'Failed to add item');
+      Alert.alert(t('common.error'), t('checklist.failedToAddItem'));
     }
   };
 
@@ -89,31 +91,31 @@ export default function ChecklistDetailScreen() {
       if (notificationId) {
         await updateChecklistItem(itemId, { reminderDate });
         loadData();
-        Alert.alert('Success', 'Reminder scheduled successfully!');
+        Alert.alert(t('common.success'), t('checklist.reminderScheduled'));
       } else {
-        Alert.alert('Error', 'Failed to schedule reminder');
+        Alert.alert(t('common.error'), t('checklist.failedToScheduleReminder'));
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to schedule reminder');
+      Alert.alert(t('common.error'), t('checklist.failedToScheduleReminder'));
     }
   };
 
   const showReminderPicker = (itemId: number) => {
     Alert.alert(
-      'Set Reminder',
-      'When would you like to be reminded?',
+      t('checklist.setReminder'),
+      t('checklist.reminderPrompt'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         { 
-          text: '1 hour', 
+          text: t('checklist.oneHour'), 
           onPress: () => scheduleReminder(itemId, Date.now() + 60 * 60 * 1000)
         },
         { 
-          text: '1 day', 
+          text: t('checklist.oneDay'), 
           onPress: () => scheduleReminder(itemId, Date.now() + 24 * 60 * 60 * 1000)
         },
         { 
-          text: '1 week', 
+          text: t('checklist.oneWeek'), 
           onPress: () => scheduleReminder(itemId, Date.now() + 7 * 24 * 60 * 60 * 1000)
         },
       ]
@@ -122,19 +124,19 @@ export default function ChecklistDetailScreen() {
 
   const handleDeleteItem = (itemId: number, itemText: string) => {
     Alert.alert(
-      'Delete Item',
-      `Are you sure you want to delete "${itemText}"?`,
+      t('checklist.deleteItem'),
+      t('checklist.deleteItemConfirm', { item: itemText }),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         { 
-          text: 'Delete', 
+          text: t('common.delete'), 
           style: 'destructive', 
           onPress: async () => {
             try {
               await deleteChecklistItem(itemId);
               loadData();
             } catch (error) {
-              Alert.alert('Error', 'Failed to delete item');
+              Alert.alert(t('common.error'), t('checklist.failedToDeleteItem'));
             }
           }
         }
@@ -144,19 +146,19 @@ export default function ChecklistDetailScreen() {
 
   const handleDeleteChecklist = () => {
     Alert.alert(
-      'Delete Checklist',
-      `Are you sure you want to delete "${checklist?.name}"?`,
+      t('checklist.deleteChecklist'),
+      t('checklist.deleteChecklistConfirm', { name: checklist?.name }),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         { 
-          text: 'Delete', 
+          text: t('common.delete'), 
           style: 'destructive', 
           onPress: async () => {
             try {
               await deleteChecklist(Number(checklistId));
               router.back();
             } catch (error) {
-              Alert.alert('Error', 'Failed to delete checklist');
+              Alert.alert(t('common.error'), t('checklist.failedToDeleteChecklist'));
             }
           }
         }
@@ -243,7 +245,7 @@ export default function ChecklistDetailScreen() {
   if (!checklist) {
     return (
       <ThemedView style={styles.container}>
-        <ThemedText>Loading...</ThemedText>
+        <ThemedText>{t('common.loading')}</ThemedText>
       </ThemedView>
     );
   }
@@ -254,10 +256,9 @@ export default function ChecklistDetailScreen() {
     <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <ThemedText type="link">← Back</ThemedText>
+          <ThemedTextI18n i18nKey="navigation.back" type="link" />
         </TouchableOpacity>
         
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.titleContainer}>
             <ThemedText type="title" style={[styles.title, { color: text }]}>
@@ -274,12 +275,13 @@ export default function ChecklistDetailScreen() {
           </TouchableOpacity>
         </View>
         
-        {/* Progress Bar */}
         <View style={styles.progressSection}>
           <View style={styles.progressHeader}>
-            <ThemedText style={[styles.progressText, { color: text }]}>
-              Progress: {stats.completed}/{stats.total} ({stats.percentage}%)
-            </ThemedText>
+            <ThemedTextI18n 
+              i18nKey="checklist.progress" 
+              i18nOptions={{ completed: stats.completed, total: stats.total, percentage: stats.percentage }}
+              style={[styles.progressText, { color: text }]}
+            />
           </View>
           <View style={[styles.progressBar, { backgroundColor: theme.icon }]}>
             <View 
@@ -294,12 +296,11 @@ export default function ChecklistDetailScreen() {
           </View>
         </View>
         
-        {/* Add Item */}
         {isAddingItem ? (
           <View style={[styles.addItemContainer, { backgroundColor: theme.background, borderColor: theme.icon }]}>
             <TextInput
               style={[styles.addItemInput, { borderColor: border, color: text }]}
-              placeholder="Add new item..."
+              placeholder={t('placeholders.addNewItem')}
               placeholderTextColor={border}
               value={newItemText}
               onChangeText={setNewItemText}
@@ -311,7 +312,7 @@ export default function ChecklistDetailScreen() {
                 style={[styles.addItemButton, { backgroundColor: theme.tint }]}
                 onPress={handleAddItem}
               >
-                <ThemedText style={styles.addItemButtonText}>Add</ThemedText>
+                <ThemedText style={[styles.addItemButtonText, { color: theme.text }]}>{t('common.add')}</ThemedText>
               </TouchableOpacity>
               <TouchableOpacity 
                 style={[styles.cancelButton, { borderColor: theme.icon }]}
@@ -320,7 +321,7 @@ export default function ChecklistDetailScreen() {
                   setNewItemText('');
                 }}
               >
-                <ThemedText style={[styles.cancelButtonText, { color: text }]}>Cancel</ThemedText>
+                <ThemedText style={[styles.cancelButtonText, { color: text }]}>{t('common.cancel')}</ThemedText>
               </TouchableOpacity>
             </View>
           </View>
@@ -329,20 +330,25 @@ export default function ChecklistDetailScreen() {
             style={[styles.addItemTrigger, { backgroundColor: theme.tint }]}
             onPress={() => setIsAddingItem(true)}
           >
-            <ThemedText style={styles.addItemTriggerText}>+ Add Item</ThemedText>
+            <ThemedTextI18n 
+              i18nKey="checklist.addNewItem" 
+              style={[styles.addItemTriggerText, { color: theme.text }]}
+            />
           </TouchableOpacity>
         )}
         
-        {/* Items List */}
         {items.length === 0 ? (
           <View style={styles.emptyState}>
             <ThemedText style={styles.emptyIcon}>✅</ThemedText>
-            <ThemedText type="subtitle" style={[styles.emptyTitle, { color: text }]}>
-              No items yet
-            </ThemedText>
-            <ThemedText style={[styles.emptyText, { color: text }]}>
-              Start adding items to your checklist!
-            </ThemedText>
+            <ThemedTextI18n 
+              i18nKey="checklist.noItemsYet" 
+              type="subtitle" 
+              style={[styles.emptyTitle, { color: text }]}
+            />
+            <ThemedTextI18n 
+              i18nKey="checklist.noItemsMessage" 
+              style={[styles.emptyText, { color: text }]}
+            />
           </View>
         ) : (
           <FlatList
@@ -429,7 +435,6 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   addItemTriggerText: {
-    color: 'white',
     fontSize: 16,
     fontWeight: '600',
   },
@@ -459,7 +464,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   addItemButtonText: {
-    color: 'white',
     fontSize: 14,
     fontWeight: '600',
   },

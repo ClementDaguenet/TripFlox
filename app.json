@@ -30,7 +30,8 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE"
+        "VIBRATE",
+        "POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -39,7 +40,14 @@
     },
     "linking": {
       "schemes": ["woxtripflox"],
-      "prefixes": ["woxtripflox://", "https://woxtripflox.app"]
+      "prefixes": ["woxtripflox://", "https://woxtripflox.app"],
+      "config": {
+        "screens": {
+          "share": {
+            "path": "/share/:token"
+          }
+        }
+      }
     },
     "plugins": [
       "expo-router",
@@ -67,7 +75,8 @@
         "expo-notifications",
         {
           "icon": "./assets/images/icon.png",
-          "color": "#ffffff"
+          "color": "#ffffff",
+          "defaultChannel": "default"
         }
       ]
     ],

@@ -4,7 +4,7 @@ export type UserRow = {
   id: number;
   username: string;
   email: string;
-  password: string;
+  password_hash: string;
   firstName?: string;
   lastName?: string;
   mobile?: string;
@@ -16,7 +16,9 @@ export type UserRow = {
 
 export type TripRow = {
   id: number;
+  userId: number;
   title: string;
+  description: string | null;
   startDate: number | null;
   endDate: number | null;
   coverUri: string | null;
@@ -123,7 +125,7 @@ export async function initDb(): Promise<void> {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
       firstName TEXT,
       lastName TEXT,
       mobile TEXT,
@@ -165,17 +167,47 @@ export async function initDb(): Promise<void> {
   } catch (e) {
     // Column already exists, ignore error
   }
+  try {
+    await db.execAsync(`ALTER TABLE users ADD COLUMN password_hash TEXT;`);
+  } catch (e) {
+    // Column already exists, ignore error
+  }
+  
+  try {
+    await db.execAsync(`ALTER TABLE users ADD COLUMN createdAt INTEGER;`);
+    // Update existing rows to have a createdAt value
+    await db.runAsync(`UPDATE users SET createdAt = ? WHERE createdAt IS NULL;`, [Date.now()]);
+  } catch (e) {
+    // Column already exists, ignore error
+  }
+  
+  // Add description column to trips table if it doesn't exist
+  try {
+    await db.execAsync(`ALTER TABLE trips ADD COLUMN description TEXT;`);
+  } catch (e) {
+    // Column already exists, ignore error
+  }
+  
+  // Add userId column to trips table if it doesn't exist
+  try {
+    await db.execAsync(`ALTER TABLE trips ADD COLUMN userId INTEGER;`);
+  } catch (e) {
+    // Column already exists, ignore error
+  }
   
   await db.execAsync(
     `CREATE TABLE IF NOT EXISTS trips (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      userId INTEGER NOT NULL,
       title TEXT NOT NULL,
+      description TEXT,
       startDate INTEGER,
       endDate INTEGER,
       coverUri TEXT,
       lat REAL,
       lng REAL,
-      createdAt INTEGER NOT NULL
+      createdAt INTEGER NOT NULL,
+      FOREIGN KEY (userId) REFERENCES users (id) ON DELETE CASCADE
     );`
   );
   
@@ -300,8 +332,27 @@ export async function initDb(): Promise<void> {
 export async function insertUser(params: { username: string; email: string; password: string; }): Promise<number> {
   const db = getDb();
   const createdAt = Date.now();
+  
+  // Validate input parameters
+  if (!params.username || !params.email || !params.password) {
+    throw new Error('Missing required fields: username, email, and password are required');
+  }
+  
+  if (params.username.length < 3) {
+    throw new Error('Username must be at least 3 characters long');
+  }
+  
+  if (params.password.length < 6) {
+    throw new Error('Password must be at least 6 characters long');
+  }
+  
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(params.email)) {
+    throw new Error('Invalid email format');
+  }
+  
   const result = await db.runAsync(
-    "INSERT INTO users (username, email, password, createdAt) VALUES (?, ?, ?, ?)",
+    "INSERT INTO users (username, email, password_hash, createdAt) VALUES (?, ?, ?, ?)",
     [params.username, params.email, params.password, createdAt]
   );
   return result.lastInsertRowId ?? 0;
@@ -318,31 +369,146 @@ export async function deleteUserByEmail(email: string): Promise<void> {
   await db.runAsync("DELETE FROM users WHERE email = ?", [email]);
 }
 
-export async function insertTrip(params: { title: string; startDate?: number | null; endDate?: number | null; coverUri?: string | null; }): Promise<number> {
+export async function clearAllData(): Promise<void> {
   const db = getDb();
-  const createdAt = Date.now();
-  const result = await db.runAsync(
-    "INSERT INTO trips (title, startDate, endDate, coverUri, lat, lng, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [params.title, params.startDate ?? null, params.endDate ?? null, params.coverUri ?? null, null, null, createdAt]
-  );
-  return result.lastInsertRowId ?? 0;
+  try {
+    // Drop all tables
+    await db.execAsync("DROP TABLE IF EXISTS users;");
+    await db.execAsync("DROP TABLE IF EXISTS trips;");
+    await db.execAsync("DROP TABLE IF EXISTS trip_steps;");
+    await db.execAsync("DROP TABLE IF EXISTS journal_entries;");
+    await db.execAsync("DROP TABLE IF EXISTS journal_media;");
+    await db.execAsync("DROP TABLE IF EXISTS checklists;");
+    await db.execAsync("DROP TABLE IF EXISTS checklist_items;");
+    await db.execAsync("DROP TABLE IF EXISTS trip_shares;");
+    await db.execAsync("DROP TABLE IF EXISTS trip_collaborators;");
+    
+    // Recreate the database
+    await initDb();
+    
+    console.log("Database cleared and recreated successfully");
+  } catch (error) {
+    console.error("Error clearing database:", error);
+    throw error;
+  }
 }
 
-export async function getAllTrips(): Promise<TripRow[]> {
+export async function insertTrip(params: { userId: number; title: string; description?: string | null; startDate?: number | null; endDate?: number | null; coverUri?: string | null; lat?: number | null; lng?: number | null; }): Promise<number> {
   const db = getDb();
-  const rows = await db.getAllAsync<TripRow>("SELECT * FROM trips ORDER BY createdAt DESC");
+  const createdAt = Date.now();
+  
+  // Validate input parameters
+  if (!params.userId) {
+    throw new Error('User ID is required');
+  }
+  
+  if (!params.title || params.title.trim().length === 0) {
+    throw new Error('Trip title is required');
+  }
+  
+  if (params.title.length > 100) {
+    throw new Error('Trip title must be less than 100 characters');
+  }
+  
+  if (params.description && params.description.length > 500) {
+    throw new Error('Trip description must be less than 500 characters');
+  }
+  
+  // Validate dates if provided
+  if (params.startDate && params.endDate && params.startDate >= params.endDate) {
+    throw new Error('End date must be after start date');
+  }
+  
+  const result = await db.runAsync(
+    "INSERT INTO trips (userId, title, description, startDate, endDate, coverUri, lat, lng, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [params.userId, params.title.trim(), params.description?.trim() || null, params.startDate ?? null, params.endDate ?? null, params.coverUri ?? null, params.lat ?? null, params.lng ?? null, createdAt]
+  );
+  
+  const tripId = result.lastInsertRowId ?? 0;
+  
+  // Créer automatiquement une première étape si des coordonnées sont fournies
+  if (tripId > 0 && params.lat && params.lng) {
+    try {
+      await insertTripStep({
+        tripId,
+        name: `${params.title.trim()}`,
+        description: `Initial location for ${params.title.trim()}`,
+        startDate: params.startDate,
+        endDate: params.endDate,
+        lat: params.lat,
+        lng: params.lng,
+        order: 0
+      });
+    } catch (error) {
+      console.error('Error creating initial trip step:', error);
+      // Ne pas faire échouer la création du voyage si l'étape échoue
+    }
+  }
+  
+  return tripId;
+}
+
+export async function createInitialTripStepIfNeeded(tripId: number): Promise<void> {
+  const db = getDb();
+  
+  try {
+    // Vérifier si le voyage a déjà des étapes
+    const existingSteps = await db.getAllAsync<TripStepRow>(
+      "SELECT * FROM trip_steps WHERE tripId = ? ORDER BY order_index ASC",
+      [tripId]
+    );
+    
+    // Si des étapes existent déjà, ne rien faire
+    if (existingSteps.length > 0) {
+      return;
+    }
+    
+    // Récupérer les informations du voyage
+    const trip = await db.getFirstAsync<TripRow>(
+      "SELECT * FROM trips WHERE id = ?",
+      [tripId]
+    );
+    
+    if (!trip || !trip.lat || !trip.lng) {
+      return; // Pas de coordonnées, pas d'étape initiale
+    }
+    
+    // Créer l'étape initiale
+    await insertTripStep({
+      tripId,
+      name: `${trip.title}`,
+      description: `Initial location for ${trip.title}`,
+      startDate: trip.startDate,
+      endDate: trip.endDate,
+      lat: trip.lat,
+      lng: trip.lng,
+      order: 0
+    });
+  } catch (error) {
+    console.error('Error creating initial trip step for existing trip:', error);
+  }
+}
+
+export async function getAllTrips(userId: number): Promise<TripRow[]> {
+  const db = getDb();
+  const rows = await db.getAllAsync<TripRow>("SELECT * FROM trips WHERE userId = ? ORDER BY createdAt DESC", [userId]);
   return rows;
 }
 
-export async function deleteTripById(id: number): Promise<void> {
+export async function deleteTripById(id: number, userId: number): Promise<void> {
   const db = getDb();
-  await db.runAsync("DELETE FROM trips WHERE id = ?", [id]);
+  await db.runAsync("DELETE FROM trips WHERE id = ? AND userId = ?", [id, userId]);
 }
 
-export async function getTripById(id: number): Promise<TripRow | null> {
+export async function getTripById(id: number, userId?: number): Promise<TripRow | null> {
   const db = getDb();
-  const rows = await db.getAllAsync<TripRow>("SELECT * FROM trips WHERE id = ? LIMIT 1", [id]);
-  return rows[0] ?? null;
+  if (userId) {
+    const rows = await db.getAllAsync<TripRow>("SELECT * FROM trips WHERE id = ? AND userId = ? LIMIT 1", [id, userId]);
+    return rows[0] ?? null;
+  } else {
+    const rows = await db.getAllAsync<TripRow>("SELECT * FROM trips WHERE id = ? LIMIT 1", [id]);
+    return rows[0] ?? null;
+  }
 }
 
 export async function updateTripLocation(id: number, lat: number, lng: number): Promise<void> {
@@ -351,6 +517,7 @@ export async function updateTripLocation(id: number, lat: number, lng: number): 
 }
 
 export async function updateUserProfile(email: string, profileData: {
+  username?: string;
   firstName?: string;
   lastName?: string;
   mobile?: string;
@@ -362,6 +529,10 @@ export async function updateUserProfile(email: string, profileData: {
   const fields = [];
   const values = [];
   
+  if (profileData.username !== undefined) {
+    fields.push("username = ?");
+    values.push(profileData.username);
+  }
   if (profileData.firstName !== undefined) {
     fields.push("firstName = ?");
     values.push(profileData.firstName);
@@ -503,6 +674,7 @@ export async function insertJournalEntry(params: {
   title: string;
   content?: string | null;
   entryDate: number;
+  photos?: string[] | null;
 }): Promise<number> {
   const db = getDb();
   const createdAt = Date.now();
@@ -510,7 +682,20 @@ export async function insertJournalEntry(params: {
     "INSERT INTO journal_entries (tripId, stepId, title, content, entryDate, createdAt) VALUES (?, ?, ?, ?, ?, ?)",
     [params.tripId, params.stepId ?? null, params.title, params.content ?? null, params.entryDate, createdAt]
   );
-  return result.lastInsertRowId ?? 0;
+  
+  const entryId = result.lastInsertRowId ?? 0;
+  
+  // Insert photos if provided
+  if (params.photos && params.photos.length > 0) {
+    for (const photoUri of params.photos) {
+      await db.runAsync(
+        "INSERT INTO journal_media (journalEntryId, type, uri, createdAt) VALUES (?, ?, ?, ?)",
+        [entryId, 'photo', photoUri, createdAt]
+      );
+    }
+  }
+  
+  return entryId;
 }
 
 export async function getJournalEntries(tripId: number, stepId?: number | null): Promise<JournalEntryRow[]> {
